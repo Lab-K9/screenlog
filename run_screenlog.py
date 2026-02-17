@@ -41,7 +41,7 @@ if getattr(sys, 'frozen', False):
     # 終了時にファイルハンドルをクローズするように登録
     atexit.register(_cleanup_file_handles)
 
-from screenlog.main import main
+from screenlog.menubar_app import main
 
 if __name__ == "__main__":
     main()

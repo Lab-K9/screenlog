@@ -15,14 +15,22 @@ OPTIONS = {
         'CFBundleIdentifier': 'com.screenlog.app',
         'CFBundleVersion': '1.0.0',
         'CFBundleShortVersionString': '1.0.0',
-        'LSBackgroundOnly': True,  # バックグラウンドアプリとして動作
-        'LSUIElement': True,  # Dockに表示しない
+        'LSUIElement': True,  # Dockに表示しない（メニューバーアプリ）
         'NSHighResolutionCapable': True,
         # 権限の説明（権限ダイアログに表示される）
         'NSScreenCaptureUsageDescription': 'ScreenLog needs screen recording permission to capture screenshots for activity logging.',
         'NSAppleEventsUsageDescription': 'ScreenLog needs accessibility permission to get active window information.',
     },
-    'packages': ['screenlog'],
+    'packages': [
+        'screenlog',
+        'rumps',
+        'objc',
+        'Quartz',
+        'Vision',
+        'Foundation',
+        'AppKit',
+        'CoreFoundation',
+    ],
     'includes': [
         'Quartz',
         'Quartz.CoreGraphics',
@@ -30,6 +38,7 @@ OPTIONS = {
         'Vision',
         'objc',
         'Foundation',
+        'rumps',
     ],
 }
 
