@@ -38,3 +38,4 @@ dist/
 com.screenlog.agent.plist
 scripts/install.sh
 scripts/start.sh
+.serena/
