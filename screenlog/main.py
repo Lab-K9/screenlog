@@ -14,7 +14,7 @@ sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
 from .capture import take_screenshot, delete_screenshot
-from .window import get_active_window_info, get_active_window_id
+from .window import get_window_context
 from .ocr import extract_text
 from .logger import (
     create_log_entry,
@@ -60,26 +60,40 @@ def process_single_capture(
     """
     timestamp = datetime.now()
 
-    # 1. アクティブウィンドウのIDを取得
-    window_id = get_active_window_id()
+    # 1. 作業ウィンドウの文脈を取得
+    window_context = get_window_context()
+    window_id = window_context.get("window_id")
     if window_id is None:
-        print(f"[{timestamp.strftime('%H:%M:%S')}] Warning: Could not get window ID, capturing full screen")
+        print(
+            f"[{timestamp.strftime('%H:%M:%S')}] "
+            "Warning: Could not get working window ID, capturing full screen"
+        )
 
     # 2. スクリーンショットを撮影（アクティブウィンドウのみ）
-    screenshot_path = take_screenshot(window_id=window_id)
+    screenshot_path = take_screenshot(window_id=window_id if isinstance(window_id, int) else None)
     if screenshot_path is None:
         print(f"[{timestamp.isoformat()}] Screenshot capture failed, skipping...")
         return (None, previous_entry)
 
     try:
-        # 3. アクティブウィンドウ情報を取得
-        active_app, window_title = get_active_window_info()
+        # 3. 作業ウィンドウ情報を取得
+        active_app = str(window_context.get("working_app") or "Unknown")
+        window_title = str(window_context.get("working_title") or "Unknown")
 
         # 4. OCR処理
         ocr_result = extract_text(screenshot_path)
 
         # 5. 前回のエントリと比較
-        if previous_entry is not None and previous_entry["ocr_text"] == ocr_result.text:
+        same_working_app = (
+            previous_entry is not None
+            and previous_entry.get("working_app", previous_entry.get("active_app")) == active_app
+            and previous_entry.get("working_title", previous_entry.get("window_title")) == window_title
+        )
+        if (
+            previous_entry is not None
+            and previous_entry["ocr_text"] == ocr_result.text
+            and same_working_app
+        ):
             # OCRテキストが同じ場合は既存エントリを更新
             current_entry = update_log_entry(
                 entry=previous_entry,
@@ -96,11 +110,17 @@ def process_single_capture(
                 window_title=window_title,
                 ocr_text=ocr_result.text,
                 ocr_confidence=ocr_result.confidence,
-                timestamp=timestamp
+                timestamp=timestamp,
+                window_context=window_context,
             )
             to_write = previous_entry  # 前回のエントリをファイルに書き込む
             text_preview = ocr_result.text[:50].replace('\n', ' ') if ocr_result.text else "(empty)"
-            print(f"[{timestamp.strftime('%H:%M:%S')}] (new) {active_app} - {window_title[:30]}... | OCR: {text_preview}...")
+            focused_app = window_context.get("focused_app")
+            focus_note = f" focused={focused_app}" if focused_app and focused_app != active_app else ""
+            print(
+                f"[{timestamp.strftime('%H:%M:%S')}] "
+                f"(new) {active_app} - {window_title[:30]}...{focus_note} | OCR: {text_preview}..."
+            )
 
         return (to_write, current_entry)
 

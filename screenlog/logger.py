@@ -3,11 +3,12 @@
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import TypedDict
+from typing import Any, NotRequired, TypedDict
 
 
 class LogEntry(TypedDict):
     """圧縮されたログエントリの型定義"""
+    schema_version: NotRequired[int]
     start_time: str
     end_time: str
     duration_minutes: int
@@ -16,6 +17,17 @@ class LogEntry(TypedDict):
     window_title: str
     ocr_text: str
     avg_ocr_confidence: float | None
+    focused_app: NotRequired[str]
+    focused_title: NotRequired[str]
+    focused_bundle_id: NotRequired[str | None]
+    focused_pid: NotRequired[int | None]
+    working_app: NotRequired[str]
+    working_title: NotRequired[str]
+    working_bundle_id: NotRequired[str | None]
+    window_id: NotRequired[int | None]
+    capture_mode: NotRequired[str]
+    selection_reason: NotRequired[str]
+    top_windows: NotRequired[list[dict[str, Any]]]
 
 
 def get_log_dir() -> Path:
@@ -48,7 +60,8 @@ def create_log_entry(
     window_title: str,
     ocr_text: str,
     ocr_confidence: float | None = None,
-    timestamp: datetime | None = None
+    timestamp: datetime | None = None,
+    window_context: dict[str, Any] | None = None,
 ) -> LogEntry:
     """
     ログエントリを作成（初回作成時）
@@ -68,16 +81,41 @@ def create_log_entry(
 
     timestamp_str = timestamp.astimezone().isoformat()
 
+    context = window_context or {}
+    working_app = str(context.get("working_app") or active_app or "Unknown")
+    working_title = str(context.get("working_title") or window_title or "Unknown")
+
     entry: LogEntry = {
+        "schema_version": 2,
         "start_time": timestamp_str,
         "end_time": timestamp_str,
         "duration_minutes": 1,
         "snapshot_count": 1,
-        "active_app": active_app,
-        "window_title": window_title,
+        "active_app": working_app,
+        "window_title": working_title,
         "ocr_text": ocr_text,
         "avg_ocr_confidence": ocr_confidence
     }
+
+    optional_fields = [
+        "focused_app",
+        "focused_title",
+        "focused_bundle_id",
+        "focused_pid",
+        "working_app",
+        "working_title",
+        "working_bundle_id",
+        "window_id",
+        "capture_mode",
+        "selection_reason",
+        "top_windows",
+    ]
+    for field in optional_fields:
+        if field in context:
+            entry[field] = context[field]
+
+    entry.setdefault("working_app", working_app)
+    entry.setdefault("working_title", working_title)
 
     return entry
 
@@ -122,17 +160,12 @@ def update_log_entry(
     else:
         new_avg = entry["avg_ocr_confidence"]
 
-    # エントリを更新
-    updated_entry: LogEntry = {
-        "start_time": entry["start_time"],
-        "end_time": new_timestamp.astimezone().isoformat(),
-        "duration_minutes": duration,
-        "snapshot_count": new_count,
-        "active_app": entry["active_app"],
-        "window_title": entry["window_title"],
-        "ocr_text": entry["ocr_text"],
-        "avg_ocr_confidence": new_avg
-    }
+    # エントリを更新。v2の追加メタデータはそのまま保持する。
+    updated_entry: LogEntry = dict(entry)  # type: ignore[assignment]
+    updated_entry["end_time"] = new_timestamp.astimezone().isoformat()
+    updated_entry["duration_minutes"] = duration
+    updated_entry["snapshot_count"] = new_count
+    updated_entry["avg_ocr_confidence"] = new_avg
 
     return updated_entry
 

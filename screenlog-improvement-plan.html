@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ScreenLog 改善計画</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18212f;
+      --muted: #5d6878;
+      --line: #d9dee7;
+      --paper: #f7f8fa;
+      --panel: #ffffff;
+      --blue: #2563eb;
+      --teal: #0f766e;
+      --amber: #b45309;
+      --red: #b42318;
+      --green: #137333;
+      --shadow: 0 16px 42px rgba(24, 33, 47, 0.10);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.7;
+    }
+
+    main {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 56px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 84px 1fr;
+      gap: 22px;
+      align-items: center;
+      padding: 28px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      border-radius: 8px;
+    }
+
+    .hero img {
+      width: 84px;
+      height: 84px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+    }
+
+    h1, h2, h3, p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: clamp(28px, 4vw, 46px);
+      line-height: 1.18;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      margin-top: 12px;
+      max-width: 820px;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    .status-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 18px 0 28px;
+    }
+
+    .metric {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-left: 5px solid var(--blue);
+      border-radius: 8px;
+      padding: 14px 16px;
+      min-height: 112px;
+    }
+
+    .metric:nth-child(2) {
+      border-left-color: var(--teal);
+    }
+
+    .metric:nth-child(3) {
+      border-left-color: var(--amber);
+    }
+
+    .metric:nth-child(4) {
+      border-left-color: var(--red);
+    }
+
+    .label {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .value {
+      display: block;
+      margin-top: 8px;
+      font-size: 20px;
+      font-weight: 800;
+      line-height: 1.35;
+    }
+
+    .note {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    section {
+      margin-top: 28px;
+      padding: 28px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    h2 {
+      font-size: 24px;
+      line-height: 1.35;
+      letter-spacing: 0;
+    }
+
+    .section-lead {
+      margin-top: 8px;
+      max-width: 820px;
+      color: var(--muted);
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .plain-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      background: #fbfcfe;
+    }
+
+    .plain-card h3 {
+      font-size: 17px;
+      line-height: 1.4;
+      margin-bottom: 8px;
+    }
+
+    ul {
+      margin: 10px 0 0;
+      padding-left: 20px;
+    }
+
+    li {
+      margin: 6px 0;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .step {
+      min-height: 162px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+      padding: 16px;
+      position: relative;
+    }
+
+    .step strong {
+      display: block;
+      font-size: 15px;
+      line-height: 1.35;
+      margin-bottom: 10px;
+    }
+
+    .step p {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      margin-bottom: 12px;
+      border-radius: 50%;
+      background: var(--ink);
+      color: white;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 18px;
+      overflow-wrap: anywhere;
+      font-size: 15px;
+    }
+
+    th, td {
+      border: 1px solid var(--line);
+      padding: 12px 14px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #eef2f7;
+      font-weight: 800;
+    }
+
+    .tag {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      color: #fff;
+      background: var(--blue);
+      white-space: nowrap;
+    }
+
+    .tag.red {
+      background: var(--red);
+    }
+
+    .tag.amber {
+      background: var(--amber);
+    }
+
+    .tag.green {
+      background: var(--green);
+    }
+
+    .callout {
+      margin-top: 18px;
+      border-left: 5px solid var(--teal);
+      background: #ecfdf5;
+      border-radius: 8px;
+      padding: 16px 18px;
+    }
+
+    .callout strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .timeline {
+      margin-top: 18px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .timeline-item {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 16px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+    }
+
+    .phase {
+      font-weight: 800;
+      color: var(--blue);
+    }
+
+    .footer {
+      margin-top: 28px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: #eef2f7;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.95em;
+    }
+
+    @media (max-width: 860px) {
+      main {
+        width: min(100% - 20px, 760px);
+        padding-top: 18px;
+      }
+
+      .hero {
+        grid-template-columns: 1fr;
+      }
+
+      .status-strip,
+      .two-col,
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      .timeline-item {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <img src="assets/ScreenLog_preview_128.png" alt="ScreenLog icon">
+      <div>
+        <h1>ScreenLogを信頼できる作業コンテキストにする改善計画</h1>
+        <p class="lead">今のScreenLogは画面の文字は取れている一方で、「何のアプリで、どの仕事をしていたか」の判定が弱い。プロダクトとしては、記録できているだけでなく、後から仕事を正しく思い出せる状態まで引き上げる必要がある。</p>
+      </div>
+    </header>
+
+    <div class="status-strip">
+      <div class="metric">
+        <span class="label">Current Signal</span>
+        <span class="value">OCR本文は有用</span>
+        <span class="note">朝ルーティン、business-context、SCO/IDEEなどは読み取れている。</span>
+      </div>
+      <div class="metric">
+        <span class="label">Current Risk</span>
+        <span class="value">アプリ名が信用できない</span>
+        <span class="note">実作業ではない tldv や loginwindow が作業アプリとして出ている。</span>
+      </div>
+      <div class="metric">
+        <span class="label">Product Gap</span>
+        <span class="value">記録と活用が分離</span>
+        <span class="note">JSONLには残るが、日次文脈には十分流れていない。</span>
+      </div>
+      <div class="metric">
+        <span class="label">Goal</span>
+        <span class="value">仕事の記憶補助へ</span>
+        <span class="note">あとから「何に時間を使ったか」を高い納得感で復元する。</span>
+      </div>
+    </div>
+
+    <section>
+      <h2>Why: なぜ直すのか</h2>
+      <p class="section-lead">ScreenLogの価値は「スクリーンショットを保存すること」ではなく、「本人が忘れても仕事の流れを復元できること」にある。</p>
+      <div class="two-col">
+        <div class="plain-card">
+          <h3>最大の失敗</h3>
+          <p>ログは大量にあるのに、振り返り時に「これは何の作業だったのか」が分からない状態。これだと記録コストだけが残り、意思決定や振り返りに使えない。</p>
+        </div>
+        <div class="plain-card">
+          <h3>防ぎたいこと</h3>
+          <p>tldvやloginwindowのような補助的な表示を「作業アプリ」と誤認し、実際の仕事時間、案件、負荷を間違って判断すること。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>To-Be: 目指す状態</h2>
+      <p class="section-lead">プロダクトオーナーが見たい成功状態は、技術的なログが増えることではなく、日次・週次の振り返りに使える信頼できる作業コンテキストが出ること。</p>
+      <table>
+        <thead>
+          <tr>
+            <th>観点</th>
+            <th>成功状態</th>
+            <th>判断方法</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>作業アプリ</td>
+            <td>実際に作業していたアプリやウィンドウが分かる。</td>
+            <td><code>working_app</code> と <code>working_title</code> が tldv などに乗っ取られない。</td>
+          </tr>
+          <tr>
+            <td>作業内容</td>
+            <td>OCR本文から、何の案件・タスク・会議準備をしていたかが読める。</td>
+            <td>直近30分のサマリーを見て、人間が納得できる。</td>
+          </tr>
+          <tr>
+            <td>日次活用</td>
+            <td>朝・夕方ルーティンやbusiness-contextに、作業実績として自然に流れる。</td>
+            <td>案件一致がなくても、作業セッション要約が残る。</td>
+          </tr>
+          <tr>
+            <td>運用確認</td>
+            <td>動いているか、メタデータが壊れていないかをすぐ確認できる。</td>
+            <td><code>screenlog doctor</code> で状態が一目で分かる。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>As-Is: 現状</h2>
+      <p class="section-lead">実測では、ScreenLogは止まっていない。問題は「取れていない」ではなく、「取れている情報のラベル付けと活用が弱い」こと。</p>
+      <div class="two-col">
+        <div class="plain-card">
+          <h3><span class="tag green">取れている</span> OCR本文</h3>
+          <ul>
+            <li>朝ルーティンの内容が読める。</li>
+            <li>business-contextでの調査や修正内容が読める。</li>
+            <li>SCO、IDEE、Corporate-OS、BUSINESS-ALLIANCEなどのキーワードが拾えている。</li>
+          </ul>
+        </div>
+        <div class="plain-card">
+          <h3><span class="tag red">弱い</span> メタデータ</h3>
+          <ul>
+            <li><code>active_app</code> が tldv や loginwindow になりやすい。</li>
+            <li><code>window_title</code> が Unknown になりやすい。</li>
+            <li>作業アプリと、画面上に重なっている補助アプリを区別できていない。</li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout">
+        <strong>現時点の評価</strong>
+        生データとしては価値がある。ただし、そのままではプロダクト判断に使える品質ではない。OCRは使えるので、作り直すべきは「何の作業かを判定する層」と「日次文脈へ流す層」。
+      </div>
+    </section>
+
+    <section>
+      <h2>Gap: 理想と現状の差</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Gap</th>
+            <th>何が足りないか</th>
+            <th>影響</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="tag red">Gap 1</span> 作業アプリ判定</td>
+            <td>前面アプリだけを信じており、補助アプリやオーバーレイを除外できない。</td>
+            <td>時間集計や作業分類が間違う。</td>
+          </tr>
+          <tr>
+            <td><span class="tag red">Gap 2</span> ウィンドウ情報</td>
+            <td>タイトル取得が失敗しても、代替情報を十分に残していない。</td>
+            <td>後から「どの画面だったか」を追えない。</td>
+          </tr>
+          <tr>
+            <td><span class="tag amber">Gap 3</span> ログ構造</td>
+            <td><code>active_app</code> と <code>ocr_text</code> 中心で、判断材料が少ない。</td>
+            <td>AIが推測に頼りやすい。</td>
+          </tr>
+          <tr>
+            <td><span class="tag amber">Gap 4</span> 日次活用</td>
+            <td>business-context側は案件キーワード一致のログだけを拾う。</td>
+            <td>重要な作業でも、案件名が出ないと捨てられる。</td>
+          </tr>
+          <tr>
+            <td><span class="tag amber">Gap 5</span> 運用診断</td>
+            <td>壊れているかどうかを確認する標準コマンドがない。</td>
+            <td>問題に気づくのが遅れる。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>How: 改善の進め方</h2>
+      <p class="section-lead">一気に全部作り替えるより、まず診断を入れて、次に作業判定を直し、その後で活用導線を整える。</p>
+      <div class="flow">
+        <div class="step">
+          <span class="num">1</span>
+          <strong>診断CLI</strong>
+          <p><code>screenlog doctor</code> で、今何を作業アプリとして見ているかを表示する。</p>
+        </div>
+        <div class="step">
+          <span class="num">2</span>
+          <strong>作業アプリ判定</strong>
+          <p>前面アプリ、ウィンドウ一覧、除外ルールを組み合わせて tldv 誤判定を避ける。</p>
+        </div>
+        <div class="step">
+          <span class="num">3</span>
+          <strong>ログv2</strong>
+          <p><code>focused_app</code>、<code>working_app</code>、候補ウィンドウ、capture方式を残す。</p>
+        </div>
+        <div class="step">
+          <span class="num">4</span>
+          <strong>サマリー改善</strong>
+          <p>エントリ数ではなく時間で集計し、作業トピックを読みやすく出す。</p>
+        </div>
+        <div class="step">
+          <span class="num">5</span>
+          <strong>日次連携</strong>
+          <p>案件一致なしの作業も、operator loadや日次作業実績として残す。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>実行ロードマップ</h2>
+      <div class="timeline">
+        <div class="timeline-item">
+          <div>
+            <div class="phase">Phase 1</div>
+            <div>信頼性の可視化</div>
+          </div>
+          <div>
+            <p><code>screenlog doctor</code> を作り、現在の作業アプリ判定・権限・直近ログ更新時刻・候補ウィンドウを見える化する。ここで「何がズレているか」を再現できる状態にする。</p>
+          </div>
+        </div>
+        <div class="timeline-item">
+          <div>
+            <div class="phase">Phase 2</div>
+            <div>作業判定の修正</div>
+          </div>
+          <div>
+            <p>tldvやloginwindowを作業アプリとして扱わないため、複数の情報源から実作業ウィンドウを選ぶ。ログには選定理由も残す。</p>
+          </div>
+        </div>
+        <div class="timeline-item">
+          <div>
+            <div class="phase">Phase 3</div>
+            <div>読みやすい日次化</div>
+          </div>
+          <div>
+            <p>ログv2とサマリーを整え、日次の活動レポートとして読める形にする。アプリ時間、案件候補、会議準備、タスク棚卸しなどを分ける。</p>
+          </div>
+        </div>
+        <div class="timeline-item">
+          <div>
+            <div class="phase">Phase 4</div>
+            <div>business-context連携</div>
+          </div>
+          <div>
+            <p>案件キーワードに当たらない作業も、作業セッション要約として取り込む。これにより、実際の稼働・負荷・関心領域が文脈として残る。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>受入基準</h2>
+      <ul>
+        <li>tldvが表示されていても、実作業アプリが <code>working_app</code> に入る。</li>
+        <li><code>window_title</code> が Unknown だけで埋まらず、代替情報も確認できる。</li>
+        <li>直近30分の作業を、人間が納得できる粒度でサマリーできる。</li>
+        <li>案件名が出ない作業も、日次の作業実績として残る。</li>
+        <li><code>screenlog doctor</code> で「動いているか」「取れているか」「ズレていないか」を確認できる。</li>
+      </ul>
+    </section>
+
+    <p class="footer">作成日: 2026-05-12 / 対象: ScreenLog 作業ログ改善計画</p>
+  </main>
+</body>
+</html>

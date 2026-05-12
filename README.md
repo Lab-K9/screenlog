@@ -52,6 +52,9 @@ python -m screenlog.main -i 60
 # 1回だけキャプチャして終了
 python -m screenlog.main --once
 
+# ウィンドウ判定・権限・直近ログを診断
+python -m screenlog.doctor
+
 # 設定をファイルに保存（次回以降のデフォルトになる）
 python -m screenlog.main -i 300 --save-config
 ```
@@ -78,17 +81,37 @@ cat ~/Library/Application\ Support/ScreenLog/logs/$(date +%Y-%m-%d).jsonl | jq .
 
 ```json
 {
-  "timestamp": "2024-12-23T14:35:00+09:00",
+  "schema_version": 2,
+  "start_time": "2026-05-12T11:01:06+09:00",
+  "end_time": "2026-05-12T11:01:06+09:00",
+  "duration_minutes": 1,
+  "snapshot_count": 1,
   "active_app": "Visual Studio Code",
   "window_title": "main.py - MyProject",
+  "focused_app": "tldv",
+  "focused_title": "Floating recorder",
+  "working_app": "Visual Studio Code",
+  "working_title": "main.py - MyProject",
+  "capture_mode": "working_window",
+  "selection_reason": "first_non_excluded_visible_window",
   "ocr_text": "def process_screenshot():\n    # スクリーンショットを処理する...",
-  "ocr_confidence": 0.85
+  "avg_ocr_confidence": 0.85,
+  "top_windows": []
 }
 ```
 
+`active_app` / `window_title` は後方互換のため残しているが、v2では実作業の判定には `working_app` / `working_title` を使う。`focused_app` はmacOSが前面とみなしたアプリで、tldvなどの補助アプリが入る場合がある。
+
 ## AIによる作業まとめ
 
-ログファイルをAI（Claude等）に渡して、以下のようなプロンプトで要約させる：
+ログファイルをAI（Claude等）に直接渡す代わりに、まずLLM向けMarkdownへ整形する：
+
+```bash
+python -m screenlog.summarize
+python -m screenlog.summarize -d 2026-05-12 -n 3
+```
+
+出力をAIに渡して、以下のようなプロンプトで要約させる：
 
 ```
 以下は今日の作業ログです。JSONLファイルの各行がスクリーンショットから取得した情報です。
@@ -98,6 +121,17 @@ cat ~/Library/Application\ Support/ScreenLog/logs/$(date +%Y-%m-%d).jsonl | jq .
 ---
 [JSONLファイルの内容をここに貼り付け]
 ```
+
+### 診断
+
+アプリ名がtldvやloginwindowに偏る、ウィンドウタイトルがUnknownになる、ログ更新が止まっている場合は以下を実行する：
+
+```bash
+python -m screenlog.doctor
+python -m screenlog.doctor --json
+```
+
+`focused` はOS上の前面アプリ、`working` はScreenLogが実作業と判断したアプリを表す。両者がズレる場合でも、`working` が実作業に近ければ正常。
 
 ## 権限設定
 

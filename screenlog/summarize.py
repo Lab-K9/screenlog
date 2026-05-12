@@ -11,6 +11,57 @@ from collections import defaultdict
 from .logger import read_log_entries, LogEntry
 
 
+TOPIC_KEYWORDS = [
+    "business-context",
+    "BUSINESS-ALLIANCE",
+    "Corporate-OS",
+    "SCO",
+    "IDEE",
+    "beyondS",
+    "morning routine",
+    "now.md",
+    "todo",
+    "Issue",
+    "Slack",
+    "Claude",
+]
+
+
+def entry_app_name(entry: LogEntry | dict) -> str:
+    """v2ログではworking_app、旧ログではactive_appを作業アプリ名として使う。"""
+    return str(entry.get("working_app") or entry.get("active_app") or "Unknown")
+
+
+def entry_window_title(entry: LogEntry | dict) -> str:
+    """v2ログではworking_title、旧ログではwindow_titleを使う。"""
+    return str(entry.get("working_title") or entry.get("window_title") or "")
+
+
+def entry_duration(entry: LogEntry | dict) -> int:
+    """ログエントリの継続時間を分単位で取得する。"""
+    try:
+        return max(1, int(entry.get("duration_minutes") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def extract_topic_hints(entries: list[LogEntry] | list[dict]) -> list[str]:
+    """OCR本文から日次振り返りに使いやすいトピック候補を抽出する。"""
+    haystack = "\n".join(
+        "\n".join(
+            str(entry.get(key) or "")
+            for key in ("working_title", "window_title", "ocr_text")
+        )
+        for entry in entries
+    )
+    lower_haystack = haystack.casefold()
+    hints = []
+    for keyword in TOPIC_KEYWORDS:
+        if keyword.casefold() in lower_haystack:
+            hints.append(keyword)
+    return hints
+
+
 def calculate_app_usage(entries: list[LogEntry]) -> dict[str, int]:
     """
     アプリ使用時間を計算
@@ -24,8 +75,8 @@ def calculate_app_usage(entries: list[LogEntry]) -> dict[str, int]:
     usage = defaultdict(int)
 
     for entry in entries:
-        app = entry["active_app"]
-        usage[app] += 1
+        app = entry_app_name(entry)
+        usage[app] += entry_duration(entry)
 
     return dict(sorted(usage.items(), key=lambda x: x[1], reverse=True))
 
@@ -76,6 +127,7 @@ def generate_raw_log(date: datetime | None = None, max_entries_per_block: int = 
 
     app_usage = calculate_app_usage(entries)
     time_blocks = group_entries_by_time_block(entries, 30)
+    topic_hints = extract_topic_hints(entries)
 
     lines = [
         f"## {date.strftime('%Y-%m-%d')} のScreenLog",
@@ -85,7 +137,7 @@ def generate_raw_log(date: datetime | None = None, max_entries_per_block: int = 
         "",
         "---",
         "",
-        "### アプリ使用時間",
+        "### 作業アプリ使用時間",
         "",
     ]
 
@@ -95,6 +147,11 @@ def generate_raw_log(date: datetime | None = None, max_entries_per_block: int = 
         pct = (minutes / total) * 100 if total > 0 else 0
         bar = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
         lines.append(f"- {app}: {minutes}分 ({pct:.0f}%) {bar}")
+
+    if topic_hints:
+        lines.extend(["", "### 検出トピック候補", ""])
+        for hint in topic_hints:
+            lines.append(f"- {hint}")
 
     lines.extend(["", "---", "", "### 時間帯別の作業内容（OCRテキスト）", ""])
     lines.append("以下は各時間帯のスクリーンショットからOCRで抽出したテキストです。")
@@ -107,8 +164,8 @@ def generate_raw_log(date: datetime | None = None, max_entries_per_block: int = 
         end_time = (block_time + timedelta(minutes=30)).strftime("%H:%M")
 
         # このブロックのメインアプリ
-        apps_in_block = [e["active_app"] for e in block_entries]
-        main_app = max(set(apps_in_block), key=apps_in_block.count)
+        block_usage = calculate_app_usage(block_entries)
+        main_app = next(iter(block_usage.keys()), "Unknown")
 
         lines.append(f"#### {time_str} - {end_time}（{main_app}）")
         lines.append("")
@@ -132,10 +189,14 @@ def generate_raw_log(date: datetime | None = None, max_entries_per_block: int = 
             seen_prefixes.add(prefix)
 
             ts = entry["start_time"][11:16]
-            app = entry["active_app"]
-            window = entry.get("window_title", "")[:60]
+            app = entry_app_name(entry)
+            window = entry_window_title(entry)[:60]
 
             lines.append(f"**{ts}** [{app}] {window}")
+            if entry.get("focused_app") and entry.get("focused_app") != app:
+                lines.append(
+                    f"- focused: {entry.get('focused_app')} / capture: {entry.get('capture_mode', '-')}"
+                )
             lines.append("```")
             # OCRテキストは長すぎる場合は切り詰め
             if len(ocr_text) > 1500:

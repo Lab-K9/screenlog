@@ -6,7 +6,7 @@ macOS作業ログ自動生成ツール。1分間隔でスクリーンショッ�
 
 - Python 3.13 + venv
 - macOS Vision Framework（OCR）
-- PyObjC（objc, Quartz, Vision, Foundation, AppKit, CoreFoundation）
+- PyObjC（objc, Quartz, Vision, Foundation, AppKit, CoreFoundation, ApplicationServices）
 - rumps（メニューバーアプリ）
 - py2app（.appバンドル生成）
 
@@ -42,6 +42,7 @@ dist/ScreenLog.app/Contents/MacOS/python -c "
 import objc; print('objc OK')
 import Vision; print('Vision OK')
 import Quartz; print('Quartz OK')
+import ApplicationServices; print('ApplicationServices OK')
 from Foundation import NSURL; print('Foundation OK')
 from AppKit import NSWorkspace; print('AppKit OK')
 "
@@ -66,3 +67,5 @@ open dist/ScreenLog.app
 - ログ保存先: `~/Library/Application Support/ScreenLog/logs/YYYY-MM-DD.jsonl`
 - 一時スクリーンショット: `~/Library/Application Support/ScreenLog/tmp/`（処理後に自動削除）
 - ログ保持期間: 30日（起動時に古いログを自動削除）
+- 診断: `source venv/bin/activate && python -m screenlog.doctor`
+- v2ログでは `focused_app`（OS上の前面）と `working_app`（ScreenLogが作業実体と判断）を分離する。サマリーや分析では `working_app` を優先する。

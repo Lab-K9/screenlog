@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .capture import take_screenshot, delete_screenshot
-from .window import get_active_window_info, get_active_window_id
+from .window import get_window_context
 from .ocr import extract_text
 from .logger import (
     create_log_entry,
@@ -201,23 +201,34 @@ class ScreenLogApp(rumps.App):
         """1回のキャプチャ処理を実行"""
         timestamp = datetime.now()
 
-        # アクティブウィンドウのIDを取得
-        window_id = get_active_window_id()
+        # 作業ウィンドウの文脈を取得
+        window_context = get_window_context()
+        window_id = window_context.get("window_id")
 
         # スクリーンショットを撮影
-        screenshot_path = take_screenshot(window_id=window_id)
+        screenshot_path = take_screenshot(window_id=window_id if isinstance(window_id, int) else None)
         if screenshot_path is None:
             return (None, self.current_entry)
 
         try:
-            # アクティブウィンドウ情報を取得
-            active_app, window_title = get_active_window_info()
+            # 作業ウィンドウ情報を取得
+            active_app = str(window_context.get("working_app") or "Unknown")
+            window_title = str(window_context.get("working_title") or "Unknown")
 
             # OCR処理
             ocr_result = extract_text(screenshot_path)
 
             # 前回のエントリと比較
-            if self.current_entry is not None and self.current_entry["ocr_text"] == ocr_result.text:
+            same_working_app = (
+                self.current_entry is not None
+                and self.current_entry.get("working_app", self.current_entry.get("active_app")) == active_app
+                and self.current_entry.get("working_title", self.current_entry.get("window_title")) == window_title
+            )
+            if (
+                self.current_entry is not None
+                and self.current_entry["ocr_text"] == ocr_result.text
+                and same_working_app
+            ):
                 # OCRテキストが同じ場合は既存エントリを更新
                 current_entry = update_log_entry(
                     entry=self.current_entry,
@@ -232,7 +243,8 @@ class ScreenLogApp(rumps.App):
                     window_title=window_title,
                     ocr_text=ocr_result.text,
                     ocr_confidence=ocr_result.confidence,
-                    timestamp=timestamp
+                    timestamp=timestamp,
+                    window_context=window_context,
                 )
                 to_write = self.current_entry
 

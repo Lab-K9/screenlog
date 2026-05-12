@@ -98,11 +98,22 @@ ScreenLogは、macOS上で動作する作業ログ自動生成ツールである
 
 ```json
 {
-  "timestamp": "2024-12-23T14:35:00+09:00",
+  "schema_version": 2,
+  "start_time": "2026-05-12T11:01:06+09:00",
+  "end_time": "2026-05-12T11:01:06+09:00",
+  "duration_minutes": 1,
+  "snapshot_count": 1,
   "active_app": "Visual Studio Code",
   "window_title": "main.py - MyProject",
+  "focused_app": "tldv",
+  "focused_title": "Floating recorder",
+  "working_app": "Visual Studio Code",
+  "working_title": "main.py - MyProject",
+  "capture_mode": "working_window",
+  "selection_reason": "first_non_excluded_visible_window",
   "ocr_text": "def process_screenshot():\n    # スクリーンショットを処理する\n    capture = take_screenshot()\n    ...",
-  "ocr_confidence": 0.85
+  "avg_ocr_confidence": 0.85,
+  "top_windows": []
 }
 ```
 
@@ -110,11 +121,22 @@ ScreenLogは、macOS上で動作する作業ログ自動生成ツールである
 
 | フィールド名 | 型 | 必須 | 説明 |
 |-------------|-----|------|------|
-| timestamp | string (ISO 8601) | ✓ | キャプチャ取得時刻 |
-| active_app | string | ✓ | アクティブなアプリケーション名 |
-| window_title | string | ✓ | アクティブウィンドウのタイトル |
+| schema_version | number | ✓ | ログスキーマのバージョン |
+| start_time | string (ISO 8601) | ✓ | セッション開始時刻 |
+| end_time | string (ISO 8601) | ✓ | セッション終了時刻 |
+| duration_minutes | number | ✓ | セッション継続時間 |
+| snapshot_count | number | ✓ | 統合されたスクリーンショット数 |
+| active_app | string | ✓ | 後方互換用の作業アプリ名 |
+| window_title | string | ✓ | 後方互換用の作業ウィンドウタイトル |
+| focused_app | string | - | macOSが前面とみなしたアプリケーション名 |
+| focused_title | string | - | macOSが前面とみなしたウィンドウタイトル |
+| working_app | string | - | ScreenLogが実作業と判断したアプリケーション名 |
+| working_title | string | - | ScreenLogが実作業と判断したウィンドウタイトル |
+| capture_mode | string | - | `working_window` または `full_screen` |
+| selection_reason | string | - | 作業ウィンドウ選定理由 |
 | ocr_text | string | ✓ | OCRで抽出されたテキスト（抽出できなかった場合は空文字） |
-| ocr_confidence | number | - | OCRの信頼度スコア（0.0〜1.0、取得可能な場合） |
+| avg_ocr_confidence | number | - | OCRの平均信頼度スコア（0.0〜1.0、取得可能な場合） |
+| top_windows | array | - | 診断用の上位ウィンドウ候補 |
 
 ### 5.3 ファイル構成
 

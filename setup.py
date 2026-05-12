@@ -30,6 +30,7 @@ OPTIONS = {
         'Foundation',
         'AppKit',
         'CoreFoundation',
+        'ApplicationServices',
     ],
     'includes': [
         'Quartz',
@@ -39,6 +40,7 @@ OPTIONS = {
         'objc',
         'Foundation',
         'rumps',
+        'ApplicationServices',
     ],
 }
 
