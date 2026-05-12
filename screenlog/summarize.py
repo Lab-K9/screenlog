@@ -8,6 +8,7 @@
 import argparse
 from datetime import datetime, timedelta
 from collections import defaultdict
+from pathlib import Path
 from .logger import read_log_entries, LogEntry
 
 
@@ -25,6 +26,43 @@ TOPIC_KEYWORDS = [
     "Slack",
     "Claude",
 ]
+
+
+PROJECT_KEYWORDS = {
+    "business-context": [
+        "business-context",
+        "operator-cockpit",
+        "Corporate-OS",
+        "source coverage",
+    ],
+    "sco": [
+        "SCO",
+        "Paylight",
+        "recall-messenger",
+        "tc-ai-assistant",
+    ],
+    "idee-ai-expert": [
+        "IDEE",
+        "AI顧問",
+        "idee-ai-expert",
+    ],
+    "beyonds-ax": [
+        "beyondS",
+        "beyonds-ax",
+    ],
+    "screenlog": [
+        "ScreenLog",
+        "screenlog",
+        "working_app",
+    ],
+    "claude-config": [
+        "claude-config",
+        "Skill",
+        "skills/",
+    ],
+}
+
+QUALITY_RISK_APPS = {"tldv", "loginwindow", "unknown"}
 
 
 def entry_app_name(entry: LogEntry | dict) -> str:
@@ -45,6 +83,21 @@ def entry_duration(entry: LogEntry | dict) -> int:
         return 1
 
 
+def _entry_haystack(entry: LogEntry | dict) -> str:
+    return "\n".join(
+        str(entry.get(key) or "")
+        for key in (
+            "working_app",
+            "working_title",
+            "active_app",
+            "window_title",
+            "focused_app",
+            "focused_title",
+            "ocr_text",
+        )
+    )
+
+
 def extract_topic_hints(entries: list[LogEntry] | list[dict]) -> list[str]:
     """OCR本文から日次振り返りに使いやすいトピック候補を抽出する。"""
     haystack = "\n".join(
@@ -60,6 +113,60 @@ def extract_topic_hints(entries: list[LogEntry] | list[dict]) -> list[str]:
         if keyword.casefold() in lower_haystack:
             hints.append(keyword)
     return hints
+
+
+def infer_project_hints(entries: list[LogEntry] | list[dict]) -> dict[str, int]:
+    """ログ本文・タイトルから、関係しそうなプロジェクト候補を数える。"""
+    counts: dict[str, int] = {}
+    for entry in entries:
+        haystack = _entry_haystack(entry).casefold()
+        for project, keywords in PROJECT_KEYWORDS.items():
+            if any(keyword.casefold() in haystack for keyword in keywords):
+                counts[project] = counts.get(project, 0) + entry_duration(entry)
+    return dict(sorted(counts.items(), key=lambda item: item[1], reverse=True))
+
+
+def detect_quality_flags(entries: list[LogEntry] | list[dict]) -> list[str]:
+    """日次レビューで人間が確認すべきログ品質の怪しい点を抽出する。"""
+    if not entries:
+        return ["記録がありません。ScreenLog本体の稼働状態を確認してください。"]
+
+    total = len(entries)
+    legacy_count = sum(
+        1 for entry in entries if not entry.get("schema_version") or not entry.get("working_app")
+    )
+    unknown_count = sum(
+        1 for entry in entries if entry_app_name(entry).strip().casefold() in QUALITY_RISK_APPS
+    )
+    short_ocr_count = sum(
+        1 for entry in entries if len(str(entry.get("ocr_text") or "").strip()) < 50
+    )
+    focus_mismatch_count = sum(
+        1
+        for entry in entries
+        if entry.get("focused_app")
+        and str(entry.get("focused_app")).casefold() != entry_app_name(entry).casefold()
+    )
+
+    flags: list[str] = []
+    if unknown_count:
+        flags.append(
+            f"Unknown/tldv/loginwindow が作業アプリ扱いの記録が {unknown_count}/{total} 件あります。"
+        )
+    if legacy_count:
+        flags.append(
+            f"legacy形式またはworking_appなしの記録が {legacy_count}/{total} 件あります。"
+        )
+    if short_ocr_count:
+        flags.append(f"短いOCRしかない記録が {short_ocr_count}/{total} 件あります。")
+    if focus_mismatch_count:
+        flags.append(
+            f"focused_app と working_app が異なる記録が {focus_mismatch_count}/{total} 件あります。"
+        )
+    if not infer_project_hints(entries):
+        flags.append("推定プロジェクトが見つかりません。キーワード辞書かログ品質の確認が必要です。")
+
+    return flags or ["大きな異常は検出されませんでした。目視で作業理解だけ確認してください。"]
 
 
 def calculate_app_usage(entries: list[LogEntry]) -> dict[str, int]:
@@ -104,6 +211,146 @@ def group_entries_by_time_block(entries: list[LogEntry], block_minutes: int = 30
         blocks[block_start].append(entry)
 
     return dict(sorted(blocks.items()))
+
+
+def default_daily_summary_path(date: datetime | None = None, home: Path | None = None) -> Path:
+    """日次ScreenLogサマリーのデフォルト保存先を返す。"""
+    if date is None:
+        date = datetime.now()
+    root = home if home is not None else Path.home()
+    return root / "daily-notes" / "JOURNAL" / "Daily" / f"{date.strftime('%Y-%m-%d')}_screenlog-summary.md"
+
+
+def _time_range(entries: list[LogEntry] | list[dict]) -> str:
+    if not entries:
+        return "-"
+    return f"{entries[0]['start_time'][11:16]} 〜 {entries[-1]['start_time'][11:16]}"
+
+
+def _trim_text(text: str, limit: int = 260) -> str:
+    compact = " ".join(line.strip() for line in text.splitlines() if line.strip())
+    if len(compact) <= limit:
+        return compact
+    return compact[:limit] + "..."
+
+
+def generate_daily_review_from_entries(
+    entries: list[LogEntry] | list[dict],
+    date: datetime,
+    max_entries_per_block: int = 2,
+) -> str:
+    """毎日確認するためのScreenLog日次レビューMarkdownを生成する。"""
+    lines = [
+        f"# {date.strftime('%Y-%m-%d')} ScreenLog Daily Summary",
+        "",
+        "ScreenLogの自動記録を、人間が毎日確認して改善点に気づくためのMVPサマリーです。",
+        "",
+    ]
+
+    if not entries:
+        lines.extend(
+            [
+                "## 今日の作業概況",
+                "",
+                "- 記録数: 0件",
+                "- 記録時間: -",
+                "",
+                "## 怪しい判定・改善メモ",
+                "",
+                "- 記録がありません。ScreenLog本体の稼働状態を確認してください。",
+                "",
+                "## 確認メモ",
+                "",
+                "- [ ] 今日の作業理解は合っているか確認する",
+                "- [ ] 怪しい判定を1つ以上Issue/メモ化する",
+                "- [ ] business-contextへ流す価値がある内容を確認する",
+            ]
+        )
+        return "\n".join(lines)
+
+    app_usage = calculate_app_usage(entries)  # type: ignore[arg-type]
+    project_hints = infer_project_hints(entries)
+    quality_flags = detect_quality_flags(entries)
+    time_blocks = group_entries_by_time_block(entries, 30)  # type: ignore[arg-type]
+    total_minutes = sum(app_usage.values())
+
+    lines.extend(
+        [
+            "## 今日の作業概況",
+            "",
+            f"- 記録数: {len(entries)}件",
+            f"- 記録時間: {_time_range(entries)}",
+            f"- 推定記録分数: {total_minutes}分",
+            "",
+            "## 作業アプリ",
+            "",
+        ]
+    )
+    for app, minutes in list(app_usage.items())[:8]:
+        pct = (minutes / total_minutes) * 100 if total_minutes else 0
+        lines.append(f"- {app}: {minutes}分 ({pct:.0f}%)")
+
+    lines.extend(["", "## 推定プロジェクト", ""])
+    if project_hints:
+        for project, minutes in list(project_hints.items())[:8]:
+            lines.append(f"- {project}: {minutes}分相当のシグナル")
+    else:
+        lines.append("- 推定できませんでした。")
+
+    lines.extend(["", "## 時間帯別", ""])
+    for block_time, block_entries in time_blocks.items():
+        time_str = block_time.strftime("%H:%M")
+        end_time = (block_time + timedelta(minutes=30)).strftime("%H:%M")
+        block_usage = calculate_app_usage(block_entries)
+        main_app = next(iter(block_usage.keys()), "Unknown")
+        block_projects = infer_project_hints(block_entries)
+        project_text = ", ".join(list(block_projects.keys())[:3]) if block_projects else "未推定"
+        lines.append(f"### {time_str} - {end_time} / {main_app}")
+        lines.append(f"- 推定プロジェクト: {project_text}")
+
+        output_count = 0
+        for entry in block_entries:
+            if output_count >= max_entries_per_block:
+                break
+            ocr_text = str(entry.get("ocr_text") or "").strip()
+            if not ocr_text:
+                continue
+            ts = str(entry["start_time"])[11:16]
+            window = entry_window_title(entry)[:80] or "-"
+            lines.append(f"- {ts} {entry_app_name(entry)} / {window}")
+            lines.append(f"  - OCR抜粋: {_trim_text(ocr_text)}")
+            output_count += 1
+        if output_count == 0:
+            lines.append("- 有意なOCRテキストなし。")
+        lines.append("")
+
+    lines.extend(["## 怪しい判定・改善メモ", ""])
+    for flag in quality_flags:
+        lines.append(f"- {flag}")
+
+    lines.extend(
+        [
+            "",
+            "## 確認メモ",
+            "",
+            "- [ ] 今日の作業理解は合っているか確認する",
+            "- [ ] 怪しい判定を1つ以上Issue/メモ化する",
+            "- [ ] business-contextへ流す価値がある内容を確認する",
+            "",
+            "## 元データ",
+            "",
+            f"- ScreenLog raw log: ~/Library/Application Support/ScreenLog/logs/{date.strftime('%Y-%m-%d')}.jsonl",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def generate_daily_review(date: datetime | None = None, max_entries_per_block: int = 2) -> str:
+    """当日のログから日次レビューMarkdownを生成する。"""
+    if date is None:
+        date = datetime.now()
+    entries = read_log_entries(date)
+    return generate_daily_review_from_entries(entries, date, max_entries_per_block)
 
 
 def generate_raw_log(date: datetime | None = None, max_entries_per_block: int = 2) -> str:
@@ -251,6 +498,16 @@ def main():
         default=2,
         help="時間ブロックあたりの最大エントリ数。デフォルト: 2"
     )
+    parser.add_argument(
+        "--daily-review",
+        action="store_true",
+        help="毎日確認する日次レビュー形式で出力"
+    )
+    parser.add_argument(
+        "--daily-note",
+        action="store_true",
+        help="日次レビューをdaily-notes配下のデフォルトパスへ保存"
+    )
 
     args = parser.parse_args()
 
@@ -259,12 +516,21 @@ def main():
     else:
         date = datetime.now()
 
-    output = generate_raw_log(date, max_entries_per_block=args.max_per_block)
+    if args.daily_review or args.daily_note:
+        output = generate_daily_review(date, max_entries_per_block=args.max_per_block)
+    else:
+        output = generate_raw_log(date, max_entries_per_block=args.max_per_block)
 
-    if args.output:
-        with open(args.output, "w", encoding="utf-8") as f:
+    output_path = args.output
+    if args.daily_note and not output_path:
+        output_path = str(default_daily_summary_path(date))
+
+    if output_path:
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
             f.write(output)
-        print(f"ログを {args.output} に保存しました")
+        print(f"ログを {path} に保存しました")
     else:
         print(output)
 

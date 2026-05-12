@@ -111,6 +111,15 @@ python -m screenlog.summarize
 python -m screenlog.summarize -d 2026-05-12 -n 3
 ```
 
+毎日確認するための日次サマリーを `~/daily-notes/JOURNAL/Daily/` に保存する：
+
+```bash
+python -m screenlog.summarize --daily-note
+python -m screenlog.summarize -d 2026-05-12 --daily-note
+```
+
+日次サマリーには、推定プロジェクト、時間帯別の作業、怪しい判定、確認メモが含まれる。ログ品質のズレに気づいたらIssueや改善メモにする。
+
 出力をAIに渡して、以下のようなプロンプトで要約させる：
 
 ```
