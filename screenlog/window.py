@@ -156,10 +156,8 @@ def get_active_app() -> str:
         return "Unknown"
 
     except ImportError:
-        print("AppKit not available")
         return "Unknown"
-    except Exception as e:
-        print(f"Get active app error: {e}")
+    except Exception:
         return "Unknown"
 
 
@@ -182,8 +180,7 @@ def get_focused_app_context() -> dict[str, Any]:
             "focused_bundle_id": active_app.bundleIdentifier(),
             "focused_pid": int(active_app.processIdentifier()),
         }
-    except Exception as e:
-        print(f"Get focused app context error: {e}")
+    except Exception:
         return {
             "focused_app": "Unknown",
             "focused_bundle_id": None,
@@ -327,10 +324,8 @@ def collect_window_candidates() -> list[dict[str, Any]]:
             return candidates
 
     except ImportError:
-        print("Quartz framework not available")
         return []
-    except Exception as e:
-        print(f"Failed to collect window candidates: {e}")
+    except Exception:
         return []
     finally:
         window_list = None

@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 
 # デフォルト設定
-DEFAULT_INTERVAL = 300  # 5分
+DEFAULT_INTERVAL = 60  # 1分
 DEFAULT_RETENTION_DAYS = 30
+DEFAULT_FLUSH_INTERVAL = 300  # 5分
 MIN_INTERVAL = 10  # 最小間隔（秒）
 
 CONFIG_DIR = Path.home() / "Library" / "Application Support" / "ScreenLog"
@@ -22,6 +23,7 @@ def get_config() -> dict:
     defaults = {
         "interval": DEFAULT_INTERVAL,
         "retention_days": DEFAULT_RETENTION_DAYS,
+        "flush_interval": DEFAULT_FLUSH_INTERVAL,
     }
 
     if CONFIG_FILE.exists():

@@ -6,6 +6,7 @@ macOS上で動作する作業ログ自動生成ツール。スクリーンショ
 
 - **完全ローカル処理**: スクリーンショット・OCR処理はすべてローカルで完結（外部APIを使わない）
 - **自動記録**: 設定可能な間隔（デフォルト5分）でバックグラウンド動作
+- **診断可能な記録**: 空OCR・画面収録権限不足・メニューバーのみの疑いもログに残す
 - **日本語・英語対応**: macOS Vision Frameworkによる高精度OCR
 - **AI連携前提**: 蓄積されたログをAIに渡して作業時間をまとめられる
 
@@ -34,6 +35,14 @@ pip install -r requirements.txt
 
 ### 起動
 
+常用は Mac アプリ版に寄せる。画面収録権限は `Terminal` や `python` と `ScreenLog.app` で別扱いになるため、常用入口を混ぜない。
+
+```bash
+open /Applications/ScreenLog.app
+```
+
+CLI は開発・診断用として使う。
+
 ```bash
 # 起動スクリプトを使用（デフォルト: 5分間隔）
 ./scripts/start-background.sh
@@ -49,6 +58,9 @@ python -m screenlog.main
 # キャプチャ間隔を指定（秒）
 python -m screenlog.main -i 60
 
+# 同じ画面が続く場合も5分ごとにログを分割保存
+python -m screenlog.main -i 60 --flush-interval 300
+
 # 1回だけキャプチャして終了
 python -m screenlog.main --once
 
@@ -56,7 +68,7 @@ python -m screenlog.main --once
 python -m screenlog.doctor
 
 # 設定をファイルに保存（次回以降のデフォルトになる）
-python -m screenlog.main -i 300 --save-config
+python -m screenlog.main -i 60 --flush-interval 300 --save-config
 ```
 
 ### 停止
@@ -94,6 +106,11 @@ cat ~/Library/Application\ Support/ScreenLog/logs/$(date +%Y-%m-%d).jsonl | jq .
   "working_title": "main.py - MyProject",
   "capture_mode": "working_window",
   "selection_reason": "first_non_excluded_visible_window",
+  "capture_status": "ok",
+  "capture_error": null,
+  "ocr_length": 56,
+  "is_suspicious": false,
+  "screen_recording_allowed": true,
   "ocr_text": "def process_screenshot():\n    # スクリーンショットを処理する...",
   "avg_ocr_confidence": 0.85,
   "top_windows": []
@@ -101,6 +118,8 @@ cat ~/Library/Application\ Support/ScreenLog/logs/$(date +%Y-%m-%d).jsonl | jq .
 ```
 
 `active_app` / `window_title` は後方互換のため残しているが、v2では実作業の判定には `working_app` / `working_title` を使う。`focused_app` はmacOSが前面とみなしたアプリで、tldvなどの補助アプリが入る場合がある。
+
+`capture_status` は `ok` / `empty_ocr` / `suspicious_menu_only` / `screen_permission_denied` / `capture_failed` のいずれか。空OCRも診断目的で保存する。
 
 ## AIによる作業まとめ
 
@@ -142,17 +161,22 @@ python -m screenlog.doctor --json
 
 `focused` はOS上の前面アプリ、`working` はScreenLogが実作業と判断したアプリを表す。両者がズレる場合でも、`working` が実作業に近ければ正常。
 
+`health_status` が `screen_permission_denied` の場合は画面収録権限を確認する。`stale_log` の場合は常駐プロセス、flush interval、直近の `capture_status` を確認する。
+
 ## 権限設定
 
 初回実行時に以下の権限を求められる：
 
 1. **画面収録（Screen Recording）**
    - システム設定 > プライバシーとセキュリティ > 画面収録
-   - ターミナル（または使用するアプリ）を許可
+   - 常用する `ScreenLog.app` を許可
+   - 権限変更後は `ScreenLog.app` を再起動する
 
 2. **アクセシビリティ（Accessibility）**
    - システム設定 > プライバシーとセキュリティ > アクセシビリティ
-   - ターミナル（または使用するアプリ）を許可
+   - 常用する `ScreenLog.app` を許可
+
+Macアプリを再ビルドして置き換える場合は、同じBundle IDと安定したコード署名を維持する。ad-hoc署名のまま頻繁に置き換えると、macOSの権限紐付けが不安定になりやすい。
 
 ## ファイル構成
 
@@ -162,7 +186,8 @@ python -m screenlog.doctor --json
 │   ├── 2024-12-21.jsonl
 │   ├── 2024-12-22.jsonl
 │   └── 2024-12-23.jsonl
-└── tmp/                      # 一時ファイル（自動削除）
+├── tmp/                      # 一時ファイル（自動削除）
+└── config.json               # interval / retention_days / flush_interval
 ```
 
 ## ライセンス

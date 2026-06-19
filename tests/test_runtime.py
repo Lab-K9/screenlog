@@ -1,0 +1,33 @@
+import unittest
+
+from screenlog.runtime import load_runtime_settings
+
+
+class RuntimeSettingsTests(unittest.TestCase):
+    def test_load_runtime_settings_defaults_to_one_minute_capture(self):
+        settings = load_runtime_settings({})
+
+        self.assertEqual(settings.interval, 60)
+        self.assertEqual(settings.flush_interval, 300)
+
+    def test_load_runtime_settings_reads_config_values(self):
+        settings = load_runtime_settings(
+            {
+                "interval": 120,
+                "retention_days": 14,
+                "flush_interval": 240,
+            }
+        )
+
+        self.assertEqual(settings.interval, 120)
+        self.assertEqual(settings.retention_days, 14)
+        self.assertEqual(settings.flush_interval, 240)
+
+    def test_load_runtime_settings_defaults_flush_interval(self):
+        settings = load_runtime_settings({"interval": 60, "retention_days": 30})
+
+        self.assertEqual(settings.flush_interval, 300)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -7,16 +7,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .capture import take_screenshot, delete_screenshot
-from .window import get_window_context
-from .ocr import extract_text
 from .logger import (
-    create_log_entry,
-    update_log_entry,
     write_log_entry,
     cleanup_old_logs,
     LogEntry
 )
+from .permissions import ensure_screen_recording_access
+from .recorder import process_capture
+from .runtime import load_runtime_settings
 
 
 class ScreenLogApp(rumps.App):
@@ -29,8 +27,10 @@ class ScreenLogApp(rumps.App):
         )
 
         # 設定
-        self.interval = 60  # キャプチャ間隔（秒）
-        self.retention_days = 30  # ログ保持日数
+        settings = load_runtime_settings()
+        self.interval = settings.interval
+        self.retention_days = settings.retention_days
+        self.flush_interval = settings.flush_interval
         self.enabled = True
         self.running = True
 
@@ -38,11 +38,13 @@ class ScreenLogApp(rumps.App):
         self.current_entry: LogEntry | None = None
         self.current_date = datetime.now().date()
         self.last_capture_time: datetime | None = None
+        self.screen_recording_allowed: bool | None = None
         self.today_capture_count = 0
         self.capture_thread: threading.Thread | None = None
 
         # メニュー構築
         self.build_menu()
+        self.check_screen_recording_permission(None, notify_allowed=False)
 
         # 起動時に古いログをクリーンアップ
         deleted = cleanup_old_logs(days=self.retention_days)
@@ -87,6 +89,9 @@ class ScreenLogApp(rumps.App):
 
         # ログフォルダを開く
         self.menu.add(rumps.MenuItem("ログフォルダを開く", callback=self.open_log_folder))
+
+        # 画面収録権限
+        self.menu.add(rumps.MenuItem("画面収録の許可を確認", callback=self.check_screen_recording_permission))
 
         self.menu.add(rumps.separator)
 
@@ -141,6 +146,33 @@ class ScreenLogApp(rumps.App):
         log_dir = Path.home() / "Library" / "Application Support" / "ScreenLog" / "logs"
         subprocess.run(["open", str(log_dir)])
 
+    def check_screen_recording_permission(self, _, *, notify_allowed: bool = True):
+        """Screen Recording permission check/request entry point."""
+        result = ensure_screen_recording_access()
+        self.screen_recording_allowed = result.allowed
+
+        if result.allowed is True:
+            if notify_allowed:
+                rumps.notification(
+                    title="ScreenLog",
+                    subtitle="画面収録は許可されています",
+                    message="",
+                    sound=False,
+                )
+            return
+
+        if result.requested:
+            message = "システム設定でScreenLogを許可してから、ScreenLogを再起動してください"
+        else:
+            message = "画面収録の許可状態を確認できませんでした"
+
+        rumps.notification(
+            title="ScreenLog",
+            subtitle="画面収録の許可が必要です",
+            message=message,
+            sound=False,
+        )
+
     def start_capture_thread(self):
         """キャプチャスレッドを開始"""
         self.capture_thread = threading.Thread(target=self.capture_loop, daemon=True)
@@ -168,13 +200,16 @@ class ScreenLogApp(rumps.App):
                     self.today_capture_count = 0
 
                 # キャプチャ処理
-                to_write, new_entry = self.process_single_capture()
+                result = process_capture(
+                    previous_entry=self.current_entry,
+                    flush_interval_seconds=self.flush_interval,
+                )
 
-                if to_write is not None:
-                    write_log_entry(to_write)
+                if result.to_write is not None:
+                    write_log_entry(result.to_write)
                     self.today_capture_count += 1
 
-                self.current_entry = new_entry
+                self.current_entry = result.current_entry
                 self.last_capture_time = now
 
                 # 定期的にGCを実行
@@ -196,66 +231,6 @@ class ScreenLogApp(rumps.App):
         # 停止時に最後のエントリを書き込む
         if self.current_entry is not None:
             write_log_entry(self.current_entry)
-
-    def process_single_capture(self) -> tuple[LogEntry | None, LogEntry | None]:
-        """1回のキャプチャ処理を実行"""
-        timestamp = datetime.now()
-
-        # 作業ウィンドウの文脈を取得
-        window_context = get_window_context()
-        window_id = window_context.get("window_id")
-
-        # スクリーンショットを撮影
-        screenshot_path = take_screenshot(window_id=window_id if isinstance(window_id, int) else None)
-        if screenshot_path is None:
-            return (None, self.current_entry)
-
-        try:
-            # 作業ウィンドウ情報を取得
-            active_app = str(window_context.get("working_app") or "Unknown")
-            window_title = str(window_context.get("working_title") or "Unknown")
-
-            # OCR処理
-            ocr_result = extract_text(screenshot_path)
-
-            # 前回のエントリと比較
-            same_working_app = (
-                self.current_entry is not None
-                and self.current_entry.get("working_app", self.current_entry.get("active_app")) == active_app
-                and self.current_entry.get("working_title", self.current_entry.get("window_title")) == window_title
-            )
-            if (
-                self.current_entry is not None
-                and self.current_entry["ocr_text"] == ocr_result.text
-                and same_working_app
-            ):
-                # OCRテキストが同じ場合は既存エントリを更新
-                current_entry = update_log_entry(
-                    entry=self.current_entry,
-                    new_timestamp=timestamp,
-                    new_confidence=ocr_result.confidence
-                )
-                to_write = None
-            else:
-                # OCRテキストが変わった場合は新しいエントリを作成
-                current_entry = create_log_entry(
-                    active_app=active_app,
-                    window_title=window_title,
-                    ocr_text=ocr_result.text,
-                    ocr_confidence=ocr_result.confidence,
-                    timestamp=timestamp,
-                    window_context=window_context,
-                )
-                to_write = self.current_entry
-
-            return (to_write, current_entry)
-
-        except Exception as e:
-            print(f"Error in process_single_capture: {e}")
-            return (None, self.current_entry)
-
-        finally:
-            delete_screenshot(screenshot_path)
 
     def quit_app(self, _):
         """アプリを終了"""

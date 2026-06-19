@@ -55,6 +55,8 @@ ScreenLogは、macOS上で動作する作業ログ自動生成ツールである
 | F-LOG-02 | 日付別ファイル管理 | 1日1ファイルとして管理する（例：2024-12-23.jsonl） |
 | F-LOG-03 | 追記モード | 既存ファイルに追記していく形式とする |
 | F-LOG-04 | タイムスタンプ記録 | 各ログエントリにISO 8601形式のタイムスタンプを含める |
+| F-LOG-05 | 診断ステータス記録 | 空OCR・画面収録権限不足・メニューバーのみの疑いをログに残す |
+| F-LOG-06 | 継続画面の定期flush | 同じ画面が続く場合でも一定間隔でログを分割保存する |
 
 ### 3.4 プロセス管理機能
 
@@ -111,6 +113,11 @@ ScreenLogは、macOS上で動作する作業ログ自動生成ツールである
   "working_title": "main.py - MyProject",
   "capture_mode": "working_window",
   "selection_reason": "first_non_excluded_visible_window",
+  "capture_status": "ok",
+  "capture_error": null,
+  "ocr_length": 56,
+  "is_suspicious": false,
+  "screen_recording_allowed": true,
   "ocr_text": "def process_screenshot():\n    # スクリーンショットを処理する\n    capture = take_screenshot()\n    ...",
   "avg_ocr_confidence": 0.85,
   "top_windows": []
@@ -134,6 +141,11 @@ ScreenLogは、macOS上で動作する作業ログ自動生成ツールである
 | working_title | string | - | ScreenLogが実作業と判断したウィンドウタイトル |
 | capture_mode | string | - | `working_window` または `full_screen` |
 | selection_reason | string | - | 作業ウィンドウ選定理由 |
+| capture_status | string | - | `ok` / `empty_ocr` / `suspicious_menu_only` / `screen_permission_denied` / `capture_failed` |
+| capture_error | string/null | - | キャプチャ失敗や権限不足の診断メッセージ |
+| ocr_length | number | - | OCRテキストの文字数 |
+| is_suspicious | boolean | - | 記録品質が怪しい場合にtrue |
+| screen_recording_allowed | boolean/null | - | 画面収録権限のpreflight結果 |
 | ocr_text | string | ✓ | OCRで抽出されたテキスト（抽出できなかった場合は空文字） |
 | avg_ocr_confidence | number | - | OCRの平均信頼度スコア（0.0〜1.0、取得可能な場合） |
 | top_windows | array | - | 診断用の上位ウィンドウ候補 |
@@ -141,13 +153,13 @@ ScreenLogは、macOS上で動作する作業ログ自動生成ツールである
 ### 5.3 ファイル構成
 
 ```
-~/ScreenLog/
+~/Library/Application Support/ScreenLog/
 ├── logs/
 │   ├── 2024-12-21.jsonl
 │   ├── 2024-12-22.jsonl
 │   └── 2024-12-23.jsonl
 ├── tmp/                      # 一時ファイル（自動削除）
-└── config.json              # 設定ファイル（オプション）
+└── config.json              # interval / retention_days / flush_interval
 ```
 
 ---
@@ -159,10 +171,10 @@ ScreenLogは、macOS上で動作する作業ログ自動生成ツールである
 | コンポーネント | 技術 | 理由 |
 |---------------|------|------|
 | 言語 | Python 3.x | シンプルで読みやすく、macOS標準でインストール済み |
-| スクリーンキャプチャ | screencapture（macOS標準コマンド） | 追加インストール不要、高速 |
-| アクティブウィンドウ取得 | AppleScript（osascript経由） | macOS標準機能で信頼性が高い |
+| スクリーンキャプチャ | Quartz / CoreGraphics（PyObjC経由） | ウィンドウ指定キャプチャと権限preflightを扱う |
+| アクティブウィンドウ取得 | NSWorkspace / CGWindowList / AXUIElement（PyObjC経由） | focused と working window を分離して記録する |
 | OCR | Vision Framework（pyobjc経由） | ローカル処理、日本語対応、無料 |
-| スケジューリング | Python標準（time.sleep or schedule） | シンプルな実装で十分 |
+| スケジューリング | Python標準（time.sleep） | CLI とメニューバーアプリで共通処理を使う |
 
 ### 6.2 コンポーネント構成
 
@@ -175,15 +187,15 @@ ScreenLogは、macOS上で動作する作業ログ自動生成ツールである
                   ▼
 ┌─────────────────────────────────────────────────────────┐
 │              Screen Capture Module                      │
-│  - screencaptureコマンドで画面全体をキャプチャ           │
+│  - Quartzで作業ウィンドウまたは画面全体をキャプチャ      │
 │  - 一時ファイルとして保存                               │
 └─────────────────┬───────────────────────────────────────┘
                   │
                   ▼
 ┌─────────────────────────────────────────────────────────┐
 │            Active Window Module                         │
-│  - AppleScriptでアクティブアプリ名を取得                 │
-│  - AppleScriptでウィンドウタイトルを取得                 │
+│  - NSWorkspaceでfocused appを取得                       │
+│  - CGWindowList/AXUIElementでworking windowを推定        │
 └─────────────────┬───────────────────────────────────────┘
                   │
                   ▼
@@ -191,6 +203,12 @@ ScreenLogは、macOS上で動作する作業ログ自動生成ツールである
 │                  OCR Module                             │
 │  - Vision Frameworkでテキスト抽出                       │
 │  - 日本語・英語認識                                     │
+└─────────────────┬───────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────┐
+│              Quality Classification Module              │
+│  - 空OCR・メニューのみ・権限不足を診断ステータス化       │
 └─────────────────┬───────────────────────────────────────┘
                   │
                   ▼
@@ -217,13 +235,15 @@ ScreenLogは、macOS上で動作する作業ログ自動生成ツールである
 1. 開始
 2. ループ開始（1分間隔）
    2.1. 現在時刻を取得
-   2.2. スクリーンショットを撮影し、一時ファイルに保存
-   2.3. アクティブウィンドウ情報を取得
-   2.4. 一時ファイルからOCRでテキスト抽出
-   2.5. ログエントリを作成
-   2.6. JSONLファイルに追記
-   2.7. 一時ファイルを削除
-   2.8. 1分待機
+   2.2. 画面収録権限のpreflightを確認
+   2.3. 作業ウィンドウ情報を取得
+   2.4. スクリーンショットを撮影し、一時ファイルに保存
+   2.5. 一時ファイルからOCRでテキスト抽出
+   2.6. キャプチャ品質を分類
+   2.7. ログエントリを作成または継続更新
+   2.8. 変更時・日付変更時・flush_interval到達時にJSONLへ追記
+   2.9. 一時ファイルを削除
+   2.10. 次のキャプチャまで待機
 3. ループ終了（停止シグナル受信時）
 ```
 
@@ -233,7 +253,8 @@ ScreenLogは、macOS上で動作する作業ログ自動生成ツールである
 |-----------|------|
 | スクリーンショット取得失敗 | ログに記録し、次のサイクルへスキップ |
 | アクティブウィンドウ取得失敗 | "Unknown"として記録し、処理を継続 |
-| OCR処理失敗 | ocr_textを空文字として記録し、処理を継続 |
+| OCR処理失敗 | `capture_status=empty_ocr` または `capture_failed` として記録し、処理を継続 |
+| 画面収録権限なし | `capture_status=screen_permission_denied` として記録し、ユーザーがdoctorで検知できるようにする |
 | ファイル書き込み失敗 | エラーログを出力し、リトライ後に次のサイクルへ |
 
 ---

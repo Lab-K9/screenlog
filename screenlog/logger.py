@@ -27,6 +27,11 @@ class LogEntry(TypedDict):
     window_id: NotRequired[int | None]
     capture_mode: NotRequired[str]
     selection_reason: NotRequired[str]
+    capture_status: NotRequired[str]
+    capture_error: NotRequired[str | None]
+    ocr_length: NotRequired[int]
+    is_suspicious: NotRequired[bool]
+    screen_recording_allowed: NotRequired[bool | None]
     top_windows: NotRequired[list[dict[str, Any]]]
 
 
@@ -108,6 +113,11 @@ def create_log_entry(
         "window_id",
         "capture_mode",
         "selection_reason",
+        "capture_status",
+        "capture_error",
+        "ocr_length",
+        "is_suspicious",
+        "screen_recording_allowed",
         "top_windows",
     ]
     for field in optional_fields:
@@ -170,25 +180,23 @@ def update_log_entry(
     return updated_entry
 
 
-def write_log_entry(entry: LogEntry) -> bool:
+def write_log_entry(entry: LogEntry, log_file: Path | None = None) -> bool:
     """
     ログエントリをファイルに書き込む
 
-    OCRテキストが空白の場合は保存をスキップする。
+    OCRテキストが空白の場合も診断目的で保存する。
 
     Args:
         entry: ログエントリ
 
     Returns:
-        bool: 書き込み成功した場合True、スキップした場合もTrue
+        bool: 書き込み成功した場合True
     """
-    # OCRテキストが空白の場合は保存しない
-    ocr_text = entry.get("ocr_text", "")
-    if not ocr_text or not ocr_text.strip():
-        return True  # スキップしたが正常終了として扱う
-
     try:
-        log_file = get_log_file_path()
+        if log_file is None:
+            log_file = get_log_file_path()
+        else:
+            log_file.parent.mkdir(parents=True, exist_ok=True)
 
         # JSON行を作成（ensure_ascii=Falseで日本語を保持）
         json_line = json.dumps(entry, ensure_ascii=False)
@@ -204,7 +212,10 @@ def write_log_entry(entry: LogEntry) -> bool:
         return False
 
 
-def read_log_entries(date: datetime | None = None) -> list[LogEntry]:
+def read_log_entries(
+    date: datetime | None = None,
+    log_file: Path | None = None,
+) -> list[LogEntry]:
     """
     ログエントリを読み込む
 
@@ -214,7 +225,8 @@ def read_log_entries(date: datetime | None = None) -> list[LogEntry]:
     Returns:
         list[LogEntry]: ログエントリのリスト
     """
-    log_file = get_log_file_path(date)
+    if log_file is None:
+        log_file = get_log_file_path(date)
 
     if not log_file.exists():
         return []

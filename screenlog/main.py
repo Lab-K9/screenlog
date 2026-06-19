@@ -13,24 +13,18 @@ from pathlib import Path
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
-from .capture import take_screenshot, delete_screenshot
-from .window import get_window_context
-from .ocr import extract_text
 from .logger import (
-    create_log_entry,
-    update_log_entry,
     write_log_entry,
     cleanup_old_logs,
     LogEntry
 )
 from .config import (
-    get_config,
     save_config,
-    validate_interval,
-    DEFAULT_INTERVAL,
-    DEFAULT_RETENTION_DAYS,
     MIN_INTERVAL,
+    validate_interval,
 )
+from .recorder import CaptureCycleResult, process_capture
+from .runtime import load_runtime_settings
 
 
 # グローバルな停止フラグ
@@ -45,7 +39,9 @@ def signal_handler(signum, frame):
 
 
 def process_single_capture(
-    previous_entry: LogEntry | None = None
+    previous_entry: LogEntry | None = None,
+    *,
+    flush_interval_seconds: int = 300,
 ) -> tuple[LogEntry | None, LogEntry | None]:
     """
     1回のキャプチャ処理を実行
@@ -58,82 +54,33 @@ def process_single_capture(
             - 書き込むべきエントリ: OCRテキストが変わった場合は前回のエントリ、変わってない場合はNone
             - 現在のエントリ: 今回のキャプチャで作成または更新されたエントリ
     """
-    timestamp = datetime.now()
-
-    # 1. 作業ウィンドウの文脈を取得
-    window_context = get_window_context()
-    window_id = window_context.get("window_id")
-    if window_id is None:
-        print(
-            f"[{timestamp.strftime('%H:%M:%S')}] "
-            "Warning: Could not get working window ID, capturing full screen"
-        )
-
-    # 2. スクリーンショットを撮影（アクティブウィンドウのみ）
-    screenshot_path = take_screenshot(window_id=window_id if isinstance(window_id, int) else None)
-    if screenshot_path is None:
-        print(f"[{timestamp.isoformat()}] Screenshot capture failed, skipping...")
-        return (None, previous_entry)
-
-    try:
-        # 3. 作業ウィンドウ情報を取得
-        active_app = str(window_context.get("working_app") or "Unknown")
-        window_title = str(window_context.get("working_title") or "Unknown")
-
-        # 4. OCR処理
-        ocr_result = extract_text(screenshot_path)
-
-        # 5. 前回のエントリと比較
-        same_working_app = (
-            previous_entry is not None
-            and previous_entry.get("working_app", previous_entry.get("active_app")) == active_app
-            and previous_entry.get("working_title", previous_entry.get("window_title")) == window_title
-        )
-        if (
-            previous_entry is not None
-            and previous_entry["ocr_text"] == ocr_result.text
-            and same_working_app
-        ):
-            # OCRテキストが同じ場合は既存エントリを更新
-            current_entry = update_log_entry(
-                entry=previous_entry,
-                new_timestamp=timestamp,
-                new_confidence=ocr_result.confidence
-            )
-            to_write = None  # ファイルには書き込まない
-            text_preview = ocr_result.text[:50].replace('\n', ' ') if ocr_result.text else "(empty)"
-            print(f"[{timestamp.strftime('%H:%M:%S')}] (continuing) {active_app} | Snapshots: {current_entry['snapshot_count']}")
-        else:
-            # OCRテキストが変わった場合は新しいエントリを作成
-            current_entry = create_log_entry(
-                active_app=active_app,
-                window_title=window_title,
-                ocr_text=ocr_result.text,
-                ocr_confidence=ocr_result.confidence,
-                timestamp=timestamp,
-                window_context=window_context,
-            )
-            to_write = previous_entry  # 前回のエントリをファイルに書き込む
-            text_preview = ocr_result.text[:50].replace('\n', ' ') if ocr_result.text else "(empty)"
-            focused_app = window_context.get("focused_app")
-            focus_note = f" focused={focused_app}" if focused_app and focused_app != active_app else ""
-            print(
-                f"[{timestamp.strftime('%H:%M:%S')}] "
-                f"(new) {active_app} - {window_title[:30]}...{focus_note} | OCR: {text_preview}..."
-            )
-
-        return (to_write, current_entry)
-
-    except Exception as e:
-        print(f"Error in process_single_capture: {e}")
-        return (None, previous_entry)
-
-    finally:
-        # 6. 一時ファイルを削除
-        delete_screenshot(screenshot_path)
+    result = process_capture(
+        previous_entry=previous_entry,
+        flush_interval_seconds=flush_interval_seconds,
+    )
+    _print_capture_result(result)
+    return (result.to_write, result.current_entry)
 
 
-def run_loop(interval: int = DEFAULT_INTERVAL, retention_days: int = DEFAULT_RETENTION_DAYS):
+def _print_capture_result(result: CaptureCycleResult) -> None:
+    """CLI向けに1回のキャプチャ結果を短く出力する。"""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    entry = result.current_entry
+    if entry is None:
+        print(f"[{timestamp}] {result.reason}: {result.message}")
+        return
+
+    app = entry.get("working_app", entry.get("active_app", "Unknown"))
+    title = str(entry.get("working_title", entry.get("window_title", "Unknown")))
+    status = entry.get("capture_status", "ok")
+    snapshots = entry.get("snapshot_count", 1)
+    print(
+        f"[{timestamp}] ({result.reason}) {app} - {title[:30]}... "
+        f"status={status} snapshots={snapshots}"
+    )
+
+
+def run_loop(interval: int, retention_days: int, flush_interval_seconds: int):
     """
     メインループを実行
 
@@ -145,6 +92,7 @@ def run_loop(interval: int = DEFAULT_INTERVAL, retention_days: int = DEFAULT_RET
 
     print(f"ScreenLog started. Capturing every {interval} seconds.")
     print(f"Log retention: {retention_days} days")
+    print(f"Flush interval: {flush_interval_seconds} seconds")
     print(f"Logs will be saved to: {Path.home() / 'Library' / 'Application Support' / 'ScreenLog' / 'logs'}")
     print("-" * 60)
 
@@ -174,7 +122,10 @@ def run_loop(interval: int = DEFAULT_INTERVAL, retention_days: int = DEFAULT_RET
                 current_date = now.date()
 
             # キャプチャ処理
-            to_write, new_entry = process_single_capture(current_entry)
+            to_write, new_entry = process_single_capture(
+                current_entry,
+                flush_interval_seconds=flush_interval_seconds,
+            )
 
             # OCRテキストが変わった場合は前回のエントリを書き込む
             if to_write is not None:
@@ -215,7 +166,7 @@ def run_loop(interval: int = DEFAULT_INTERVAL, retention_days: int = DEFAULT_RET
 def main():
     """メインエントリーポイント"""
     # 設定ファイルからデフォルト値を読み込む
-    config = get_config()
+    settings = load_runtime_settings()
 
     parser = argparse.ArgumentParser(
         description="ScreenLog - 作業ログ自動生成ツール"
@@ -223,7 +174,7 @@ def main():
     parser.add_argument(
         "-i", "--interval",
         type=int,
-        default=config.get("interval", DEFAULT_INTERVAL),
+        default=settings.interval,
         help=f"キャプチャ間隔（秒）。最小: {MIN_INTERVAL}秒。デフォルト: %(default)s"
     )
     parser.add_argument(
@@ -234,8 +185,14 @@ def main():
     parser.add_argument(
         "-r", "--retention",
         type=int,
-        default=config.get("retention_days", DEFAULT_RETENTION_DAYS),
+        default=settings.retention_days,
         help="ログ保持日数。デフォルト: %(default)s"
+    )
+    parser.add_argument(
+        "--flush-interval",
+        type=int,
+        default=settings.flush_interval,
+        help=f"同一画面継続時にログを分割保存する間隔（秒）。最小: {MIN_INTERVAL}秒。デフォルト: %(default)s"
     )
     parser.add_argument(
         "--save-config",
@@ -248,6 +205,7 @@ def main():
     # 間隔のバリデーション
     try:
         validate_interval(args.interval)
+        validate_interval(args.flush_interval)
     except ValueError as e:
         parser.error(str(e))
 
@@ -256,6 +214,7 @@ def main():
         new_config = {
             "interval": args.interval,
             "retention_days": args.retention,
+            "flush_interval": args.flush_interval,
         }
         if save_config(new_config):
             print(f"設定を保存しました: {new_config}")
@@ -270,7 +229,9 @@ def main():
 
     if args.once:
         # 1回だけ実行
-        to_write, current_entry = process_single_capture()
+        to_write, current_entry = process_single_capture(
+            flush_interval_seconds=args.flush_interval,
+        )
         # 即座にエントリを書き込む
         if current_entry is not None:
             success = write_log_entry(current_entry)
@@ -279,7 +240,11 @@ def main():
             sys.exit(1)
     else:
         # ループ実行
-        run_loop(interval=args.interval, retention_days=args.retention)
+        run_loop(
+            interval=args.interval,
+            retention_days=args.retention,
+            flush_interval_seconds=args.flush_interval,
+        )
 
 
 if __name__ == "__main__":
