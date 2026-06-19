@@ -1,24 +1,24 @@
 #!/bin/bash
 # ScreenLog アンインストールスクリプト
 
-PLIST_NAME="com.screenlog.agent.plist"
-PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_NAME"
-
 echo "=== ScreenLog Uninstaller ==="
 echo ""
 
-# エージェントを停止
-if [ -f "$PLIST_DST" ]; then
-    echo "Stopping ScreenLog agent..."
-    launchctl unload "$PLIST_DST" 2>/dev/null || true
-    rm "$PLIST_DST"
-    echo "Agent removed."
-else
-    echo "Agent not installed."
-fi
+for PLIST_NAME in "com.screenlog.app.plist" "com.screenlog.agent.plist"; do
+    PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_NAME"
+    if [ -f "$PLIST_DST" ]; then
+        echo "Stopping ScreenLog agent: $PLIST_NAME"
+        launchctl bootout "gui/$UID" "$PLIST_DST" 2>/dev/null || true
+        launchctl unload "$PLIST_DST" 2>/dev/null || true
+        rm "$PLIST_DST"
+        echo "Agent removed."
+    else
+        echo "Agent not installed: $PLIST_NAME"
+    fi
+done
 
 echo ""
 echo "=== Uninstallation Complete ==="
 echo ""
-echo "Note: Log files are preserved at $HOME/ScreenLog/"
-echo "To delete logs: rm -rf $HOME/ScreenLog"
+echo "Note: activity logs are preserved at $HOME/Library/Application Support/ScreenLog/logs/"
+echo "Process logs and PID files may remain at $HOME/ScreenLog/"

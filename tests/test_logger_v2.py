@@ -1,7 +1,17 @@
 import unittest
 from datetime import datetime
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
-from screenlog.logger import create_log_entry, update_log_entry
+from screenlog.logger import (
+    cleanup_old_logs,
+    create_log_entry,
+    read_log_entries,
+    update_log_entry,
+    write_log_entries,
+    write_log_entry,
+)
 
 
 class LoggerV2Tests(unittest.TestCase):
@@ -65,6 +75,69 @@ class LoggerV2Tests(unittest.TestCase):
         self.assertEqual(updated["working_app"], "Google Chrome")
         self.assertEqual(updated["capture_mode"], "working_window")
         self.assertAlmostEqual(updated["avg_ocr_confidence"], 0.9)
+
+    def test_write_log_entry_defaults_to_entry_start_date(self):
+        with TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            entry = create_log_entry(
+                active_app="Codex",
+                window_title="Codex",
+                ocr_text="previous day entry",
+                timestamp=datetime.fromisoformat("2026-06-18T23:59:30+09:00"),
+            )
+
+            with patch("screenlog.logger.get_log_dir", return_value=log_dir):
+                self.assertTrue(write_log_entry(entry))
+
+            self.assertTrue((log_dir / "2026-06-18.jsonl").exists())
+            self.assertFalse((log_dir / "2026-06-19.jsonl").exists())
+            entries = read_log_entries(log_file=log_dir / "2026-06-18.jsonl")
+
+        self.assertEqual(entries[0]["ocr_text"], "previous day entry")
+
+    def test_read_log_entries_with_date_ignores_mismatched_entry_dates(self):
+        with TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "2026-06-19.jsonl"
+            log_path.write_text(
+                '{"start_time":"2026-06-18T23:59:30+09:00","ocr_text":"wrong day"}\n'
+                '{"start_time":"2026-06-19T00:00:30+09:00","ocr_text":"right day"}\n',
+                encoding="utf-8",
+            )
+            with patch("screenlog.logger.get_log_file_path", return_value=log_path):
+                entries = read_log_entries(
+                    date=datetime.fromisoformat("2026-06-19T12:00:00+09:00")
+                )
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["ocr_text"], "right day")
+
+    def test_write_log_entries_keeps_failed_and_later_entries_pending(self):
+        entries = [
+            create_log_entry("App", "First", "first"),
+            create_log_entry("App", "Second", "second"),
+        ]
+        calls = []
+
+        def writer(entry):
+            calls.append(entry["window_title"])
+            return entry["window_title"] != "Second"
+
+        remaining = write_log_entries(entries, writer=writer)
+
+        self.assertEqual(calls, ["First", "Second"])
+        self.assertEqual([entry["window_title"] for entry in remaining], ["Second"])
+
+    def test_cleanup_old_logs_rejects_zero_retention_without_deleting(self):
+        with TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            log_file = log_dir / "2026-06-19.jsonl"
+            log_file.write_text("{}\n", encoding="utf-8")
+
+            with patch("screenlog.logger.get_log_dir", return_value=log_dir):
+                with self.assertRaises(ValueError):
+                    cleanup_old_logs(days=0)
+
+            self.assertTrue(log_file.exists())
 
 
 if __name__ == "__main__":

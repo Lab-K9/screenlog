@@ -51,6 +51,35 @@ class DoctorTests(unittest.TestCase):
         self.assertFalse(report["screen_recording_allowed"])
         self.assertEqual(report["health_status"], "screen_permission_denied")
 
+    def test_report_marks_fresh_unhealthy_capture(self):
+        with TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "2026-06-17.jsonl"
+            log_path.write_text(
+                '{"capture_status":"ok","is_suspicious":false}\n'
+                '{"capture_status":"empty_ocr","is_suspicious":true,"capture_error":null}\n',
+                encoding="utf-8",
+            )
+            checked_at = datetime.fromisoformat("2026-06-17T10:10:00+09:00")
+            modified_at = checked_at - timedelta(seconds=30)
+
+            with patch("screenlog.doctor.get_window_context") as context_mock:
+                context_mock.return_value = {
+                    "focused_app": "Codex",
+                    "working_app": "Codex",
+                    "top_windows": [],
+                }
+                report = build_doctor_report(
+                    now=checked_at,
+                    latest_log_path=log_path,
+                    latest_log_modified_at=modified_at,
+                    screen_permission_checker=lambda: True,
+                    config={"interval": 60, "flush_interval": 300},
+                )
+
+        self.assertEqual(report["latest_capture_status"], "empty_ocr")
+        self.assertTrue(report["latest_capture_suspicious"])
+        self.assertEqual(report["health_status"], "capture_unhealthy")
+
 
 if __name__ == "__main__":
     unittest.main()

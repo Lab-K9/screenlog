@@ -15,6 +15,7 @@ sys.stderr.reconfigure(line_buffering=True)
 
 from .logger import (
     write_log_entry,
+    write_log_entries,
     cleanup_old_logs,
     LogEntry
 )
@@ -22,9 +23,11 @@ from .config import (
     save_config,
     MIN_INTERVAL,
     validate_interval,
+    validate_retention_days,
 )
 from .recorder import CaptureCycleResult, process_capture
 from .runtime import load_runtime_settings
+from .capture import cleanup_tmp_screenshots
 
 
 # グローバルな停止フラグ
@@ -100,9 +103,13 @@ def run_loop(interval: int, retention_days: int, flush_interval_seconds: int):
     deleted = cleanup_old_logs(days=retention_days)
     if deleted > 0:
         print(f"Cleaned up {deleted} old log file(s)")
+    deleted_tmp = cleanup_tmp_screenshots()
+    if deleted_tmp > 0:
+        print(f"Cleaned up {deleted_tmp} old temporary screenshot(s)")
 
     # 前回のログエントリを保持（まだファイルに書き込んでいないもの）
     current_entry: LogEntry | None = None
+    pending_entries: list[LogEntry] = []
     current_date = datetime.now().date()
 
     # GC実行カウンター（10回ごとにフルGCを実行）
@@ -116,8 +123,12 @@ def run_loop(interval: int, retention_days: int, flush_interval_seconds: int):
             if now.date() != current_date:
                 # 日付が変わった場合は前回のエントリを書き込む
                 if current_entry is not None:
-                    write_log_entry(current_entry)
-                    print(f"[{now.strftime('%H:%M:%S')}] Date changed - wrote final entry to previous day's log")
+                    pending_entries.append(current_entry)
+                    pending_entries = write_log_entries(pending_entries)
+                    if pending_entries:
+                        print(f"[{now.strftime('%H:%M:%S')}] Date changed - failed to write pending entry")
+                    else:
+                        print(f"[{now.strftime('%H:%M:%S')}] Date changed - wrote final entry to previous day's log")
                 current_entry = None
                 current_date = now.date()
 
@@ -129,9 +140,12 @@ def run_loop(interval: int, retention_days: int, flush_interval_seconds: int):
 
             # OCRテキストが変わった場合は前回のエントリを書き込む
             if to_write is not None:
-                success = write_log_entry(to_write)
-                if not success:
-                    print(f"[{now.strftime('%H:%M:%S')}] Failed to write log entry")
+                pending_entries.append(to_write)
+
+            if pending_entries:
+                pending_entries = write_log_entries(pending_entries)
+                if pending_entries:
+                    print(f"[{now.strftime('%H:%M:%S')}] Failed to write pending log entry")
 
             # 現在のエントリを更新
             current_entry = new_entry
@@ -155,8 +169,15 @@ def run_loop(interval: int, retention_days: int, flush_interval_seconds: int):
 
     # 停止時に最後のエントリを書き込む
     if current_entry is not None:
-        write_log_entry(current_entry)
-        print("Wrote final log entry before stopping.")
+        pending_entries.append(current_entry)
+        current_entry = None
+
+    if pending_entries:
+        pending_entries = write_log_entries(pending_entries)
+        if pending_entries:
+            print(f"Failed to write {len(pending_entries)} pending log entry/entries before stopping.")
+        else:
+            print("Wrote final log entry before stopping.")
 
     # 最終GC
     gc.collect()
@@ -206,6 +227,7 @@ def main():
     try:
         validate_interval(args.interval)
         validate_interval(args.flush_interval)
+        validate_retention_days(args.retention)
     except ValueError as e:
         parser.error(str(e))
 

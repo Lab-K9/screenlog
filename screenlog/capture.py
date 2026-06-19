@@ -2,13 +2,9 @@
 
 import gc
 import os
+import uuid
 from pathlib import Path
 from datetime import datetime
-
-import objc
-import Quartz
-from AppKit import NSBitmapImageRep, NSPNGFileType
-
 
 def get_tmp_dir() -> Path:
     """一時ファイル用ディレクトリを取得"""
@@ -16,6 +12,39 @@ def get_tmp_dir() -> Path:
     tmp_dir = Path.home() / "Library" / "Application Support" / "ScreenLog" / "tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     return tmp_dir
+
+
+def screenshot_file_path(tmp_dir: Path, timestamp: str | None = None) -> Path:
+    """衝突しにくい一時スクリーンショットパスを作る。"""
+    if timestamp is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    unique = uuid.uuid4().hex[:12]
+    return tmp_dir / f"screenshot_{timestamp}_{os.getpid()}_{unique}.png"
+
+
+def cleanup_tmp_screenshots(
+    *,
+    max_age_seconds: int = 24 * 60 * 60,
+    now: float | None = None,
+) -> int:
+    """古いScreenLog一時スクリーンショットを削除する。"""
+    if max_age_seconds < 0:
+        raise ValueError("max_age_seconds must be greater than or equal to 0")
+
+    tmp_dir = get_tmp_dir()
+    current_time = now if now is not None else datetime.now().timestamp()
+    deleted_count = 0
+    for path in tmp_dir.glob("screenshot_*.png"):
+        try:
+            age_seconds = current_time - path.stat().st_mtime
+            if age_seconds > max_age_seconds:
+                path.unlink()
+                deleted_count += 1
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            print(f"Failed to delete old screenshot: {e}")
+    return deleted_count
 
 
 def take_screenshot(window_id: int | None = None) -> str | None:
@@ -30,14 +59,17 @@ def take_screenshot(window_id: int | None = None) -> str | None:
         str | None: 一時ファイルのパス。失敗した場合はNone
     """
     tmp_dir = get_tmp_dir()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filepath = tmp_dir / f"screenshot_{timestamp}.png"
+    filepath = screenshot_file_path(tmp_dir)
 
     image = None
     bitmap = None
     png_data = None
 
     try:
+        import objc
+        import Quartz
+        from AppKit import NSBitmapImageRep, NSPNGFileType
+
         # Autoreleaseプール内で実行してメモリリークを防ぐ
         with objc.autorelease_pool():
             # Quartz APIを使用してスクリーンキャプチャ

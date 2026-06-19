@@ -10,57 +10,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from pathlib import Path
 from .logger import read_log_entries, LogEntry
-
-
-TOPIC_KEYWORDS = [
-    "business-context",
-    "BUSINESS-ALLIANCE",
-    "Corporate-OS",
-    "SCO",
-    "IDEE",
-    "beyondS",
-    "morning routine",
-    "now.md",
-    "todo",
-    "Issue",
-    "Slack",
-    "Claude",
-]
-
-
-PROJECT_KEYWORDS = {
-    "business-context": [
-        "business-context",
-        "operator-cockpit",
-        "Corporate-OS",
-        "source coverage",
-    ],
-    "sco": [
-        "SCO",
-        "Paylight",
-        "recall-messenger",
-        "tc-ai-assistant",
-    ],
-    "idee-ai-expert": [
-        "IDEE",
-        "AI顧問",
-        "idee-ai-expert",
-    ],
-    "beyonds-ax": [
-        "beyondS",
-        "beyonds-ax",
-    ],
-    "screenlog": [
-        "ScreenLog",
-        "screenlog",
-        "working_app",
-    ],
-    "claude-config": [
-        "claude-config",
-        "Skill",
-        "skills/",
-    ],
-}
+from .project_rules import SummaryRules, load_summary_rules
 
 QUALITY_RISK_APPS = {"tldv", "loginwindow", "unknown"}
 
@@ -98,8 +48,14 @@ def _entry_haystack(entry: LogEntry | dict) -> str:
     )
 
 
-def extract_topic_hints(entries: list[LogEntry] | list[dict]) -> list[str]:
+def extract_topic_hints(
+    entries: list[LogEntry] | list[dict],
+    *,
+    rules: SummaryRules | None = None,
+) -> list[str]:
     """OCR本文から日次振り返りに使いやすいトピック候補を抽出する。"""
+    if rules is None:
+        rules = load_summary_rules()
     haystack = "\n".join(
         "\n".join(
             str(entry.get(key) or "")
@@ -109,18 +65,24 @@ def extract_topic_hints(entries: list[LogEntry] | list[dict]) -> list[str]:
     )
     lower_haystack = haystack.casefold()
     hints = []
-    for keyword in TOPIC_KEYWORDS:
+    for keyword in rules.topic_keywords:
         if keyword.casefold() in lower_haystack:
             hints.append(keyword)
     return hints
 
 
-def infer_project_hints(entries: list[LogEntry] | list[dict]) -> dict[str, int]:
+def infer_project_hints(
+    entries: list[LogEntry] | list[dict],
+    *,
+    rules: SummaryRules | None = None,
+) -> dict[str, int]:
     """ログ本文・タイトルから、関係しそうなプロジェクト候補を数える。"""
+    if rules is None:
+        rules = load_summary_rules()
     counts: dict[str, int] = {}
     for entry in entries:
         haystack = _entry_haystack(entry).casefold()
-        for project, keywords in PROJECT_KEYWORDS.items():
+        for project, keywords in rules.project_keywords.items():
             if any(keyword.casefold() in haystack for keyword in keywords):
                 counts[project] = counts.get(project, 0) + entry_duration(entry)
     return dict(sorted(counts.items(), key=lambda item: item[1], reverse=True))
@@ -414,7 +376,7 @@ def generate_raw_log(date: datetime | None = None, max_entries_per_block: int = 
         block_usage = calculate_app_usage(block_entries)
         main_app = next(iter(block_usage.keys()), "Unknown")
 
-        lines.append(f"#### {time_str} - {end_time}（{main_app}）")
+        lines.append(f"### {time_str} - {end_time}（{main_app}）")
         lines.append("")
 
         # 重複を避けつつ、代表的なエントリのみ出力

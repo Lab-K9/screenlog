@@ -1,10 +1,12 @@
 """ログ保存モジュール"""
 
 import json
+import fcntl
 from pathlib import Path
 from datetime import datetime
-from typing import Any, NotRequired, TypedDict
+from typing import Any, Callable, NotRequired, TypedDict
 
+from .config import validate_retention_days
 
 class LogEntry(TypedDict):
     """圧縮されたログエントリの型定義"""
@@ -58,6 +60,14 @@ def get_log_file_path(date: datetime | None = None) -> Path:
 
     filename = date.strftime("%Y-%m-%d") + ".jsonl"
     return get_log_dir() / filename
+
+
+def _entry_log_datetime(entry: LogEntry) -> datetime:
+    """ログ保存先の日付に使う時刻をエントリから取得する。"""
+    try:
+        return datetime.fromisoformat(str(entry["start_time"]))
+    except (KeyError, TypeError, ValueError):
+        return datetime.now().astimezone()
 
 
 def create_log_entry(
@@ -194,7 +204,7 @@ def write_log_entry(entry: LogEntry, log_file: Path | None = None) -> bool:
     """
     try:
         if log_file is None:
-            log_file = get_log_file_path()
+            log_file = get_log_file_path(_entry_log_datetime(entry))
         else:
             log_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -203,13 +213,41 @@ def write_log_entry(entry: LogEntry, log_file: Path | None = None) -> bool:
 
         # 追記モードで書き込み
         with open(log_file, "a", encoding="utf-8") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             f.write(json_line + "\n")
+            f.flush()
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
         return True
 
     except Exception as e:
         print(f"Failed to write log entry: {e}")
         return False
+
+
+def write_log_entries(
+    entries: list[LogEntry],
+    *,
+    writer: Callable[[LogEntry], bool] = write_log_entry,
+) -> list[LogEntry]:
+    """複数エントリを順に保存し、失敗した地点以降をpendingとして返す。"""
+    for index, entry in enumerate(entries):
+        if not writer(entry):
+            return entries[index:]
+    return []
+
+
+def _entry_matches_date(entry: dict[str, Any], target: datetime | None) -> bool:
+    """日付指定読み込み時、明らかに別日付のエントリを除外する。"""
+    if target is None:
+        return True
+    start_time = entry.get("start_time")
+    if not start_time:
+        return True
+    try:
+        return datetime.fromisoformat(str(start_time)).date() == target.date()
+    except ValueError:
+        return True
 
 
 def read_log_entries(
@@ -237,7 +275,9 @@ def read_log_entries(
             for line in f:
                 line = line.strip()
                 if line:
-                    entries.append(json.loads(line))
+                    entry = json.loads(line)
+                    if isinstance(entry, dict) and _entry_matches_date(entry, date):
+                        entries.append(entry)
     except Exception as e:
         print(f"Failed to read log entries: {e}")
 
@@ -256,6 +296,7 @@ def cleanup_old_logs(days: int = 30) -> int:
     """
     from datetime import timedelta
 
+    days = validate_retention_days(days)
     log_dir = get_log_dir()
     cutoff_date = datetime.now() - timedelta(days=days)
     deleted_count = 0

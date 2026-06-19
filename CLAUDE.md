@@ -15,22 +15,33 @@ macOS作業ログ自動生成ツール。1分間隔でスクリーンショッ�
 ### ビルド手順
 
 ```bash
-source venv/bin/activate
-rm -rf build dist
-python setup.py py2app
+./scripts/build-app.sh
 ```
 
-### ビルド後の必須手順: PyObjCTools の手動コピー
-
-`PyObjCTools` は namespace package（`__init__.py` がない）のため、py2app が自動でバンドルに含められない。**ビルドのたびに手動コピーが必要。**
+個人利用の常用配置:
 
 ```bash
-TARGET="dist/ScreenLog.app/Contents/Resources/lib/python3.13/PyObjCTools"
-SOURCE="venv/lib/python3.13/site-packages/PyObjCTools"
-mkdir -p "$TARGET"
-cp "$SOURCE"/*.py "$TARGET/"
-touch "$TARGET/__init__.py"
+./scripts/install-local-app.sh
 ```
+
+標準の配置先は `~/Applications/ScreenLog.app`。`ScreenLog Local Developer ID` がKeychainにある場合は自動で使い、同じBundle IDとローカル署名で更新する。
+
+署名IDがある場合:
+
+```bash
+SCREENLOG_CODESIGN_IDENTITY="<codesign identity>" ./scripts/build-app.sh
+```
+
+本番運用向けにApple Team IDまで検証する場合:
+
+```bash
+SCREENLOG_CODESIGN_IDENTITY="<Apple Developer ID identity>" SCREENLOG_REQUIRE_TEAM_ID=1 ./scripts/build-app.sh
+SCREENLOG_CODESIGN_IDENTITY="<Apple Developer ID identity>" SCREENLOG_EXPECTED_TEAM_ID="<Team ID>" ./scripts/build-app.sh
+```
+
+### ビルド時の PyObjCTools 同梱
+
+`PyObjCTools` は namespace package（`__init__.py` がない）のため、`scripts/build-app.sh` がビルド後に app bundle へコピーして `__init__.py` を作成する。スクリプトは codesign 検証と PyObjC import 検証も実行する。
 
 ### ビルド後の検証
 
@@ -53,7 +64,14 @@ from AppKit import NSWorkspace; print('AppKit OK')
 ### 起動
 
 ```bash
-open dist/ScreenLog.app
+open ~/Applications/ScreenLog.app
+```
+
+ログイン時に自動起動する場合:
+
+```bash
+./scripts/install-launch-agent.sh
+./scripts/uninstall-launch-agent.sh
 ```
 
 ### 既知の注意点
@@ -67,5 +85,6 @@ open dist/ScreenLog.app
 - ログ保存先: `~/Library/Application Support/ScreenLog/logs/YYYY-MM-DD.jsonl`
 - 一時スクリーンショット: `~/Library/Application Support/ScreenLog/tmp/`（処理後に自動削除）
 - ログ保持期間: 30日（起動時に古いログを自動削除）
-- 診断: `source venv/bin/activate && python -m screenlog.doctor`
+- 推定ルール: `~/Library/Application Support/ScreenLog/summary-rules.json`
+- 診断: `venv/bin/python -m screenlog.doctor`
 - v2ログでは `focused_app`（OS上の前面）と `working_app`（ScreenLogが作業実体と判断）を分離する。サマリーや分析では `working_app` を優先する。

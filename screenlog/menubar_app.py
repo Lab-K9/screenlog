@@ -8,13 +8,14 @@ from datetime import datetime
 from pathlib import Path
 
 from .logger import (
-    write_log_entry,
+    write_log_entries,
     cleanup_old_logs,
     LogEntry
 )
 from .permissions import ensure_screen_recording_access
 from .recorder import process_capture
 from .runtime import load_runtime_settings
+from .capture import cleanup_tmp_screenshots
 
 
 class ScreenLogApp(rumps.App):
@@ -36,11 +37,13 @@ class ScreenLogApp(rumps.App):
 
         # 状態
         self.current_entry: LogEntry | None = None
+        self.pending_entries: list[LogEntry] = []
         self.current_date = datetime.now().date()
         self.last_capture_time: datetime | None = None
         self.screen_recording_allowed: bool | None = None
         self.today_capture_count = 0
         self.capture_thread: threading.Thread | None = None
+        self.state_lock = threading.RLock()
 
         # メニュー構築
         self.build_menu()
@@ -50,6 +53,9 @@ class ScreenLogApp(rumps.App):
         deleted = cleanup_old_logs(days=self.retention_days)
         if deleted > 0:
             print(f"Cleaned up {deleted} old log file(s)")
+        deleted_tmp = cleanup_tmp_screenshots()
+        if deleted_tmp > 0:
+            print(f"Cleaned up {deleted_tmp} old temporary screenshot(s)")
 
         # キャプチャスレッド開始
         self.start_capture_thread()
@@ -110,19 +116,28 @@ class ScreenLogApp(rumps.App):
 
     def update_status(self, _):
         """ステータス表示を更新"""
-        status_text = "記録中" if self.enabled else "停止中"
+        with self.get_state_lock():
+            enabled = self.enabled
+            last_capture_time = self.last_capture_time
+            today_capture_count = self.today_capture_count
+
+        status_text = "記録中" if enabled else "停止中"
         self.status_item.title = f"状態: {status_text}"
 
-        if self.last_capture_time:
-            time_str = self.last_capture_time.strftime('%H:%M:%S')
+        if last_capture_time:
+            time_str = last_capture_time.strftime('%H:%M:%S')
             self.last_capture_item.title = f"最終: {time_str}"
 
-        self.count_item.title = f"今日: {self.today_capture_count}件"
+        self.count_item.title = f"今日: {today_capture_count}件"
         self.update_icon()
 
     def toggle_enabled(self, _):
         """有効/無効を切り替え"""
-        self.enabled = not self.enabled
+        with self.get_state_lock():
+            was_enabled = self.enabled
+            self.enabled = not self.enabled
+        if was_enabled and not self.enabled:
+            self.flush_current_entry()
         self.build_menu()
 
         if self.enabled:
@@ -173,6 +188,25 @@ class ScreenLogApp(rumps.App):
             sound=False,
         )
 
+    def get_state_lock(self) -> threading.RLock:
+        """状態更新用ロックを返す。テスト用の未初期化インスタンスにも対応する。"""
+        if not hasattr(self, "state_lock"):
+            self.state_lock = threading.RLock()
+        return self.state_lock
+
+    def flush_pending_entries(self) -> None:
+        """保存待ちエントリを順に書き込み、失敗分はpendingとして保持する。"""
+        if self.pending_entries:
+            self.pending_entries = write_log_entries(self.pending_entries)
+
+    def flush_current_entry(self) -> None:
+        """現在の未保存エントリを保存待ちに移してflushする。"""
+        with self.get_state_lock():
+            if self.current_entry is not None:
+                self.pending_entries.append(self.current_entry)
+                self.current_entry = None
+            self.flush_pending_entries()
+
     def start_capture_thread(self):
         """キャプチャスレッドを開始"""
         self.capture_thread = threading.Thread(target=self.capture_loop, daemon=True)
@@ -186,31 +220,38 @@ class ScreenLogApp(rumps.App):
         while self.running:
             try:
                 # 無効なら待機
-                if not self.enabled:
+                with self.get_state_lock():
+                    enabled = self.enabled
+                if not enabled:
                     time.sleep(1)
                     continue
 
-                # 日付が変わったかチェック
-                now = datetime.now()
-                if now.date() != self.current_date:
-                    if self.current_entry is not None:
-                        write_log_entry(self.current_entry)
-                    self.current_entry = None
-                    self.current_date = now.date()
-                    self.today_capture_count = 0
+                with self.get_state_lock():
+                    # 日付が変わったかチェック
+                    now = datetime.now()
+                    if now.date() != self.current_date:
+                        if self.current_entry is not None:
+                            self.pending_entries.append(self.current_entry)
+                        self.current_entry = None
+                        self.current_date = now.date()
+                        self.today_capture_count = 0
+                        self.flush_pending_entries()
 
-                # キャプチャ処理
-                result = process_capture(
-                    previous_entry=self.current_entry,
-                    flush_interval_seconds=self.flush_interval,
-                )
+                    # キャプチャ処理
+                    result = process_capture(
+                        previous_entry=self.current_entry,
+                        flush_interval_seconds=self.flush_interval,
+                    )
 
-                if result.to_write is not None:
-                    write_log_entry(result.to_write)
-                    self.today_capture_count += 1
+                    if result.to_write is not None:
+                        self.pending_entries.append(result.to_write)
 
-                self.current_entry = result.current_entry
-                self.last_capture_time = now
+                    before_pending_count = len(self.pending_entries)
+                    self.flush_pending_entries()
+                    self.today_capture_count += max(0, before_pending_count - len(self.pending_entries))
+
+                    self.current_entry = result.current_entry
+                    self.last_capture_time = now
 
                 # 定期的にGCを実行
                 capture_count += 1
@@ -229,13 +270,13 @@ class ScreenLogApp(rumps.App):
                 time.sleep(self.interval)
 
         # 停止時に最後のエントリを書き込む
-        if self.current_entry is not None:
-            write_log_entry(self.current_entry)
+        self.flush_current_entry()
 
     def quit_app(self, _):
         """アプリを終了"""
-        self.running = False
-        self.enabled = False
+        with self.get_state_lock():
+            self.running = False
+            self.enabled = False
 
         # キャプチャスレッドが終了するのを待つ
         if self.capture_thread and self.capture_thread.is_alive():

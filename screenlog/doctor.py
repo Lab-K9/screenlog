@@ -21,6 +21,25 @@ def _latest_log_file() -> Path | None:
     return log_files[-1] if log_files else None
 
 
+def _latest_log_entry(log_path: Path) -> dict[str, Any] | None:
+    """最新ログファイルの末尾から、最後に読めるJSON行を返す。"""
+    try:
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        return entry if isinstance(entry, dict) else None
+    return None
+
+
 def _latest_log_age_seconds(
     *,
     now: datetime,
@@ -36,6 +55,8 @@ def _health_status(
     screen_recording_allowed: bool | None,
     latest_log_age_seconds: int | None,
     stale_threshold_seconds: int,
+    latest_capture_status: str | None = None,
+    latest_capture_suspicious: bool | None = None,
 ) -> str:
     if screen_recording_allowed is False:
         return "screen_permission_denied"
@@ -43,6 +64,10 @@ def _health_status(
         return "no_logs"
     if latest_log_age_seconds > stale_threshold_seconds:
         return "stale_log"
+    if latest_capture_status and (
+        latest_capture_status != "ok" or latest_capture_suspicious is True
+    ):
+        return "capture_unhealthy"
     if screen_recording_allowed is None:
         return "permission_unknown"
     return "ok"
@@ -92,6 +117,23 @@ def build_doctor_report(
             "age_seconds": age_seconds,
         }
 
+    latest_entry = _latest_log_entry(latest_log) if latest_log is not None else None
+    latest_capture_status = (
+        str(latest_entry.get("capture_status"))
+        if latest_entry and latest_entry.get("capture_status") is not None
+        else None
+    )
+    latest_capture_suspicious = (
+        bool(latest_entry.get("is_suspicious"))
+        if latest_entry and latest_entry.get("is_suspicious") is not None
+        else None
+    )
+    latest_capture_error = (
+        str(latest_entry.get("capture_error"))
+        if latest_entry and latest_entry.get("capture_error") is not None
+        else None
+    )
+
     screen_recording_allowed = screen_permission_checker()
     log_age = latest_log_info.get("age_seconds") if latest_log_info else None
 
@@ -101,9 +143,14 @@ def build_doctor_report(
             screen_recording_allowed=screen_recording_allowed,
             latest_log_age_seconds=log_age,
             stale_threshold_seconds=stale_threshold,
+            latest_capture_status=latest_capture_status,
+            latest_capture_suspicious=latest_capture_suspicious,
         ),
         "screen_recording_allowed": screen_recording_allowed,
         "stale_threshold_seconds": stale_threshold,
+        "latest_capture_status": latest_capture_status,
+        "latest_capture_suspicious": latest_capture_suspicious,
+        "latest_capture_error": latest_capture_error,
         "focused_app": context.get("focused_app"),
         "focused_title": context.get("focused_title"),
         "working_app": context.get("working_app"),
@@ -122,6 +169,10 @@ def _print_human(report: dict[str, Any]) -> None:
     print(f"checked_at: {report['checked_at']}")
     print(f"health: {report.get('health_status') or '-'}")
     print(f"screen_recording_allowed: {report.get('screen_recording_allowed')}")
+    print(f"latest_capture_status: {report.get('latest_capture_status') or '-'}")
+    print(f"latest_capture_suspicious: {report.get('latest_capture_suspicious')}")
+    if report.get("latest_capture_error"):
+        print(f"latest_capture_error: {report.get('latest_capture_error')}")
     print(f"focused: {report.get('focused_app') or '-'} / {report.get('focused_title') or '-'}")
     print(f"working: {report.get('working_app') or '-'} / {report.get('working_title') or '-'}")
     print(f"capture: {report.get('capture_mode') or '-'} / window_id={report.get('window_id') or '-'}")
