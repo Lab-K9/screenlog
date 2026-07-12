@@ -28,38 +28,48 @@ DEFAULT_TOPIC_KEYWORDS = [
 ]
 
 DEFAULT_PROJECT_KEYWORDS = {
-    "business-context": [
-        "business-context",
-        "operator-cockpit",
-        "Corporate-OS",
-        "source coverage",
-    ],
-    "sco": [
-        "SCO",
-        "Paylight",
-        "recall-messenger",
-        "tc-ai-assistant",
-    ],
-    "idee-ai-expert": [
-        "IDEE",
-        "AI顧問",
-        "idee-ai-expert",
-    ],
-    "beyonds-ax": [
-        "beyondS",
-        "beyonds-ax",
-    ],
     "screenlog": [
         "ScreenLog",
         "screenlog",
         "working_app",
     ],
-    "claude-config": [
-        "claude-config",
-        "Skill",
-        "skills/",
-    ],
 }
+
+
+def _is_ascii_letter(char: str) -> bool:
+    """1文字がASCII英字（a-z, A-Z）かどうかを判定する。"""
+    return bool(char) and char.isascii() and char.isalpha()
+
+
+def keyword_matches(keyword: str, haystack_casefolded: str) -> bool:
+    """キーワードがcasefold済みhaystack内に妥当な形でマッチするか判定する。
+
+    ASCII英字のみのキーワード（例: "SCO"）は、`vscode` や `scope外` のように
+    英単語の一部として出現しただけの誤爆を避けるため、マッチ位置の前後が
+    ASCII英字でないことを要求する（単語境界チェック）。数字・記号・日本語文字は
+    境界として扱うため、`SCO2700万` `sco-hub` `次はSCOの` はマッチを維持する。
+    1箇所でも境界を満たす出現があればマッチとする。
+    非ASCII文字を含むキーワード（日本語等）は従来通りcasefold部分一致とする。
+    """
+    needle = keyword.casefold()
+    if not needle:
+        return False
+    if not keyword.isascii():
+        return needle in haystack_casefolded
+
+    needle_len = len(needle)
+    haystack_len = len(haystack_casefolded)
+    start = 0
+    while True:
+        idx = haystack_casefolded.find(needle, start)
+        if idx == -1:
+            return False
+        before = haystack_casefolded[idx - 1] if idx > 0 else ""
+        after_idx = idx + needle_len
+        after = haystack_casefolded[after_idx] if after_idx < haystack_len else ""
+        if not _is_ascii_letter(before) and not _is_ascii_letter(after):
+            return True
+        start = idx + 1
 
 
 @dataclass(frozen=True)

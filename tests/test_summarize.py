@@ -2,6 +2,7 @@ from datetime import datetime
 from pathlib import Path
 import unittest
 
+from screenlog.project_rules import SummaryRules
 from screenlog.summarize import (
     calculate_app_usage,
     default_daily_summary_path,
@@ -47,6 +48,8 @@ class SummarizeTests(unittest.TestCase):
         self.assertIn("SCO", hints)
 
     def test_infer_project_hints_counts_project_keywords(self):
+        # DEFAULT_PROJECT_KEYWORDSはscreenlog自身のみに縮小されているため、
+        # 実運用辞書相当のrulesを明示的に渡してマッチングを検証する。
         entries = [
             {
                 "working_title": "operator-cockpit.html",
@@ -57,8 +60,16 @@ class SummarizeTests(unittest.TestCase):
                 "ocr_text": "IDEEのGitHub運用ルールを整理",
             },
         ]
+        rules = SummaryRules(
+            topic_keywords=[],
+            project_keywords={
+                "business-context": ["business-context", "operator-cockpit"],
+                "sco": ["SCO"],
+                "idee-ai-expert": ["IDEE", "AI顧問"],
+            },
+        )
 
-        hints = infer_project_hints(entries)
+        hints = infer_project_hints(entries, rules=rules)
 
         self.assertGreaterEqual(hints["business-context"], 1)
         self.assertGreaterEqual(hints["sco"], 1)
@@ -119,6 +130,63 @@ class SummarizeTests(unittest.TestCase):
         self.assertIn("## 怪しい判定・改善メモ", review)
         self.assertIn("## 確認メモ", review)
         self.assertIn("- [ ] 今日の作業理解は合っているか確認する", review)
+
+    def test_unattributed_apps_flagged(self):
+        # 非帰属分数が総分数の30%以上のとき、上位アプリを分数付きで出す。
+        entries = [
+            {
+                "schema_version": 2,
+                "start_time": "2026-05-12T09:00:00+09:00",
+                "working_app": "AppA",
+                "duration_minutes": 20,
+                "ocr_text": "未知のテキストA",
+            },
+            {
+                "schema_version": 2,
+                "start_time": "2026-05-12T09:20:00+09:00",
+                "working_app": "AppB",
+                "duration_minutes": 15,
+                "ocr_text": "未知のテキストB",
+            },
+            {
+                "schema_version": 2,
+                "start_time": "2026-05-12T09:35:00+09:00",
+                "working_app": "ScreenLog",
+                "duration_minutes": 5,
+                "ocr_text": "ScreenLog の作業",
+            },
+        ]
+
+        flags = detect_quality_flags(entries)
+        joined = "\n".join(flags)
+
+        self.assertIn("どのプロジェクトにも帰属しない作業が35分", joined)
+        self.assertIn("AppA 20分", joined)
+        self.assertIn("AppB 15分", joined)
+        self.assertIn("summary-rules.json の辞書更新を検討", joined)
+
+        # 非帰属が30%未満なら、このフラグは出さない。
+        below_threshold_entries = [
+            {
+                "schema_version": 2,
+                "start_time": "2026-05-12T09:00:00+09:00",
+                "working_app": "ScreenLog",
+                "duration_minutes": 90,
+                "ocr_text": "ScreenLog の作業",
+            },
+            {
+                "schema_version": 2,
+                "start_time": "2026-05-12T10:30:00+09:00",
+                "working_app": "AppC",
+                "duration_minutes": 10,
+                "ocr_text": "未知のテキストC",
+            },
+        ]
+
+        below_flags = detect_quality_flags(below_threshold_entries)
+        self.assertFalse(
+            any("どのプロジェクトにも帰属しない作業" in flag for flag in below_flags)
+        )
 
     def test_default_daily_summary_path_uses_daily_notes(self):
         path = default_daily_summary_path(datetime(2026, 5, 12), home=Path("/Users/example"))

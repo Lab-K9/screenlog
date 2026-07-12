@@ -10,9 +10,13 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from pathlib import Path
 from .logger import read_log_entries, LogEntry
-from .project_rules import SummaryRules, load_summary_rules
+from .project_rules import SummaryRules, keyword_matches, load_summary_rules
 
 QUALITY_RISK_APPS = {"tldv", "loginwindow", "unknown"}
+
+# 非帰属（どのプロジェクトにもマッチしない）分数がこの割合以上のとき、
+# 日次レビューの「怪しい判定・改善メモ」に辞書更新の検討を促す。
+UNATTRIBUTED_FLAG_RATIO = 0.3
 
 
 def entry_app_name(entry: LogEntry | dict) -> str:
@@ -83,15 +87,48 @@ def infer_project_hints(
     for entry in entries:
         haystack = _entry_haystack(entry).casefold()
         for project, keywords in rules.project_keywords.items():
-            if any(keyword.casefold() in haystack for keyword in keywords):
+            if any(keyword_matches(keyword, haystack) for keyword in keywords):
                 counts[project] = counts.get(project, 0) + entry_duration(entry)
     return dict(sorted(counts.items(), key=lambda item: item[1], reverse=True))
 
 
-def detect_quality_flags(entries: list[LogEntry] | list[dict]) -> list[str]:
+def _entry_matches_any_project(entry: LogEntry | dict, rules: SummaryRules) -> bool:
+    """エントリがrules.project_keywordsのいずれかにマッチするか判定する。"""
+    haystack = _entry_haystack(entry).casefold()
+    return any(
+        keyword_matches(keyword, haystack)
+        for keywords in rules.project_keywords.values()
+        for keyword in keywords
+    )
+
+
+def unattributed_app_minutes(
+    entries: list[LogEntry] | list[dict],
+    *,
+    rules: SummaryRules | None = None,
+) -> dict[str, int]:
+    """どのプロジェクトにもマッチしなかったエントリの分数をworking_app別に集計する。"""
+    if rules is None:
+        rules = load_summary_rules()
+    unattributed: dict[str, int] = {}
+    for entry in entries:
+        if _entry_matches_any_project(entry, rules):
+            continue
+        app = entry_app_name(entry)
+        unattributed[app] = unattributed.get(app, 0) + entry_duration(entry)
+    return dict(sorted(unattributed.items(), key=lambda item: item[1], reverse=True))
+
+
+def detect_quality_flags(
+    entries: list[LogEntry] | list[dict],
+    *,
+    rules: SummaryRules | None = None,
+) -> list[str]:
     """日次レビューで人間が確認すべきログ品質の怪しい点を抽出する。"""
     if not entries:
         return ["記録がありません。ScreenLog本体の稼働状態を確認してください。"]
+    if rules is None:
+        rules = load_summary_rules()
 
     total = len(entries)
     legacy_count = sum(
@@ -125,8 +162,21 @@ def detect_quality_flags(entries: list[LogEntry] | list[dict]) -> list[str]:
         flags.append(
             f"focused_app と working_app が異なる記録が {focus_mismatch_count}/{total} 件あります。"
         )
-    if not infer_project_hints(entries):
+    if not infer_project_hints(entries, rules=rules):
         flags.append("推定プロジェクトが見つかりません。キーワード辞書かログ品質の確認が必要です。")
+
+    total_minutes = sum(entry_duration(entry) for entry in entries)
+    unattributed_minutes_by_app = unattributed_app_minutes(entries, rules=rules)
+    unattributed_minutes = sum(unattributed_minutes_by_app.values())
+    if total_minutes and unattributed_minutes >= total_minutes * UNATTRIBUTED_FLAG_RATIO:
+        top_apps = ", ".join(
+            f"{app} {minutes}分"
+            for app, minutes in list(unattributed_minutes_by_app.items())[:3]
+        )
+        flags.append(
+            f"どのプロジェクトにも帰属しない作業が{unattributed_minutes}分"
+            f"（上位: {top_apps}）。summary-rules.json の辞書更新を検討"
+        )
 
     return flags or ["大きな異常は検出されませんでした。目視で作業理解だけ確認してください。"]
 
@@ -230,9 +280,10 @@ def generate_daily_review_from_entries(
         )
         return "\n".join(lines)
 
+    rules = load_summary_rules()
     app_usage = calculate_app_usage(entries)  # type: ignore[arg-type]
-    project_hints = infer_project_hints(entries)
-    quality_flags = detect_quality_flags(entries)
+    project_hints = infer_project_hints(entries, rules=rules)
+    quality_flags = detect_quality_flags(entries, rules=rules)
     time_blocks = group_entries_by_time_block(entries, 30)  # type: ignore[arg-type]
     total_minutes = sum(app_usage.values())
 
@@ -265,7 +316,7 @@ def generate_daily_review_from_entries(
         end_time = (block_time + timedelta(minutes=30)).strftime("%H:%M")
         block_usage = calculate_app_usage(block_entries)
         main_app = next(iter(block_usage.keys()), "Unknown")
-        block_projects = infer_project_hints(block_entries)
+        block_projects = infer_project_hints(block_entries, rules=rules)
         project_text = ", ".join(list(block_projects.keys())[:3]) if block_projects else "未推定"
         lines.append(f"### {time_str} - {end_time} / {main_app}")
         lines.append(f"- 推定プロジェクト: {project_text}")
