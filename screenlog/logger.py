@@ -35,6 +35,7 @@ class LogEntry(TypedDict):
     is_suspicious: NotRequired[bool]
     screen_recording_allowed: NotRequired[bool | None]
     top_windows: NotRequired[list[dict[str, Any]]]
+    idle: NotRequired[bool]
 
 
 def get_log_dir() -> Path:
@@ -77,6 +78,7 @@ def create_log_entry(
     ocr_confidence: float | None = None,
     timestamp: datetime | None = None,
     window_context: dict[str, Any] | None = None,
+    idle: bool = False,
 ) -> LogEntry:
     """
     ログエントリを作成（初回作成時）
@@ -87,6 +89,9 @@ def create_log_entry(
         ocr_text: OCRで抽出されたテキスト
         ocr_confidence: OCR信頼度
         timestamp: タイムスタンプ。Noneの場合は現在時刻
+        idle: 無操作サイクルで作成されたエントリかどうか。Trueのときのみ
+            entryに"idle": Trueを含める（Falseの場合はキーを追加せず、
+            既存のログ形式を変えない）
 
     Returns:
         LogEntry: ログエントリ
@@ -136,6 +141,9 @@ def create_log_entry(
 
     entry.setdefault("working_app", working_app)
     entry.setdefault("working_title", working_title)
+
+    if idle:
+        entry["idle"] = True
 
     return entry
 

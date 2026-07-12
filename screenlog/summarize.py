@@ -7,7 +7,7 @@
 
 import argparse
 from datetime import datetime, timedelta
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from .logger import read_log_entries, LogEntry
 from .project_rules import SummaryRules, keyword_matches, load_summary_rules
@@ -17,6 +17,13 @@ QUALITY_RISK_APPS = {"tldv", "loginwindow", "unknown"}
 # 非帰属（どのプロジェクトにもマッチしない）分数がこの割合以上のとき、
 # 日次レビューの「怪しい判定・改善メモ」に辞書更新の検討を促す。
 UNATTRIBUTED_FLAG_RATIO = 0.3
+
+# 放置(idle)fallback heuristic: idleフラグの無い旧ログ向けに、
+# OCR先頭60字がほぼ変化しないまま続く区間を放置とみなすための閾値。
+IDLE_FALLBACK_PREFIX_LENGTH = 60
+IDLE_FALLBACK_MAX_DISTINCT_PREFIXES = 2
+IDLE_FALLBACK_MIN_STREAK = 10
+IDLE_FALLBACK_MIN_MINUTES = 30
 
 
 def entry_app_name(entry: LogEntry | dict) -> str:
@@ -117,6 +124,96 @@ def unattributed_app_minutes(
         app = entry_app_name(entry)
         unattributed[app] = unattributed.get(app, 0) + entry_duration(entry)
     return dict(sorted(unattributed.items(), key=lambda item: item[1], reverse=True))
+
+
+def _ocr_prefix(entry: LogEntry | dict) -> str:
+    """fallback heuristic比較用に、OCR本文先頭60字（strip後）を返す。"""
+    return str(entry.get("ocr_text") or "").strip()[:IDLE_FALLBACK_PREFIX_LENGTH]
+
+
+def _detect_fallback_idle_indices(entries: list[LogEntry] | list[dict]) -> set[int]:
+    """idleフラグの無い旧ログ向けに、放置と推定できる連続ブロックのindexを返す。
+
+    連続するエントリ列で、異なるOCR先頭60字（strip後）が2種類以下のまま
+    10件以上・合計30分以上続く極大ブロックを放置と推定する。既にidle:trueの
+    エントリはここでは対象にしない（呼び出し側で別集計するため）。
+
+    貪欲な拡張だけだと、静的ブロックに隣接する単発のアクティブエントリ
+    （そのprefixがブロック内に1回しか出現しない）まで吸収してしまうため、
+    ブロック確定後に先頭/末尾の「1回しか出現しないprefix」のエントリを外し、
+    件数・分数の閾値を再判定する。1回きりのprefixは切り替わり際のアクティブ画面、
+    複数回出現するprefixは静的画面のゆらぎ/フリッカーとみなす。
+    """
+    idle_indices: set[int] = set()
+    total = len(entries)
+    i = 0
+    while i < total:
+        if entries[i].get("idle"):
+            i += 1
+            continue
+
+        distinct_prefixes: dict[str, None] = {}
+        j = i
+        while j < total and not entries[j].get("idle"):
+            prefix = _ocr_prefix(entries[j])
+            if prefix not in distinct_prefixes and len(distinct_prefixes) >= IDLE_FALLBACK_MAX_DISTINCT_PREFIXES:
+                break
+            distinct_prefixes[prefix] = None
+            j += 1
+
+        # 先頭/末尾の単発prefixエントリをブロックから外す（隣接アクティブの誤分類防止）。
+        # ブロック内のdistinct prefixは最大2種類なので、元ブロックでの出現回数で判定してよい。
+        prefix_counts = Counter(_ocr_prefix(entries[k]) for k in range(i, j))
+        start, end = i, j
+        while start < end and prefix_counts[_ocr_prefix(entries[start])] == 1:
+            start += 1
+        while end > start and prefix_counts[_ocr_prefix(entries[end - 1])] == 1:
+            end -= 1
+
+        block = entries[start:end]
+        block_minutes = sum(entry_duration(entry) for entry in block)
+        if len(block) >= IDLE_FALLBACK_MIN_STREAK and block_minutes >= IDLE_FALLBACK_MIN_MINUTES:
+            idle_indices.update(range(start, end))
+
+        i = j if j > i else i + 1
+
+    return idle_indices
+
+
+def _idle_breakdown(
+    entries: list[LogEntry] | list[dict],
+) -> tuple[list[LogEntry] | list[dict], int, int]:
+    """idle:trueエントリとfallback推定ブロックを分離する。
+
+    Returns:
+        (active_entries, explicit_idle_minutes, fallback_idle_minutes):
+        放置分を除いたエントリ一覧、idle:trueによる放置分数、
+        fallback heuristicによる放置推定分数。
+    """
+    fallback_indices = _detect_fallback_idle_indices(entries)
+    active_entries: list[LogEntry] | list[dict] = []
+    explicit_minutes = 0
+    fallback_minutes = 0
+    for index, entry in enumerate(entries):
+        if entry.get("idle"):
+            explicit_minutes += entry_duration(entry)
+        elif index in fallback_indices:
+            fallback_minutes += entry_duration(entry)
+        else:
+            active_entries.append(entry)
+    return active_entries, explicit_minutes, fallback_minutes
+
+
+def split_idle_entries(
+    entries: list[LogEntry] | list[dict],
+) -> tuple[list[LogEntry] | list[dict], int]:
+    """放置(idle)と判定したエントリを除いたリストと、放置分数の合計を返す。
+
+    (1) entry.get("idle")がtruthyのエントリ、(2) fallback heuristicで放置と
+    推定した旧ログ向けブロック、の両方を放置として除外する。
+    """
+    active_entries, explicit_minutes, fallback_minutes = _idle_breakdown(entries)
+    return active_entries, explicit_minutes + fallback_minutes
 
 
 def detect_quality_flags(
@@ -281,9 +378,20 @@ def generate_daily_review_from_entries(
         return "\n".join(lines)
 
     rules = load_summary_rules()
-    app_usage = calculate_app_usage(entries)  # type: ignore[arg-type]
-    project_hints = infer_project_hints(entries, rules=rules)
-    quality_flags = detect_quality_flags(entries, rules=rules)
+    active_entries, explicit_idle_minutes, fallback_idle_minutes = _idle_breakdown(entries)
+    idle_minutes = explicit_idle_minutes + fallback_idle_minutes
+    # 全エントリが放置と判定された場合はactive_entriesが空になりうる。
+    # その場合detect_quality_flagsが「記録がありません」を返してしまうため、
+    # quality_flagsだけは元のentries全体で判定する。
+    quality_entries = active_entries if active_entries else entries
+    app_usage = calculate_app_usage(active_entries)  # type: ignore[arg-type]
+    project_hints = infer_project_hints(active_entries, rules=rules)
+    quality_flags = detect_quality_flags(quality_entries, rules=rules)
+    if fallback_idle_minutes:
+        quality_flags = list(quality_flags) + [
+            f"放置推定 {fallback_idle_minutes}分（旧ログheuristic）"
+        ]
+    # 時間帯別セクションは放置ブロックも含めて表示するため、entries全体を使う。
     time_blocks = group_entries_by_time_block(entries, 30)  # type: ignore[arg-type]
     total_minutes = sum(app_usage.values())
 
@@ -294,6 +402,12 @@ def generate_daily_review_from_entries(
             f"- 記録数: {len(entries)}件",
             f"- 記録時間: {_time_range(entries)}",
             f"- 推定記録分数: {total_minutes}分",
+        ]
+    )
+    if idle_minutes:
+        lines.append(f"- 放置: {idle_minutes}分")
+    lines.extend(
+        [
             "",
             "## 作業アプリ",
             "",

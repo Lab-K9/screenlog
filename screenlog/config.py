@@ -7,8 +7,10 @@ from pathlib import Path
 DEFAULT_INTERVAL = 60  # 1分
 DEFAULT_RETENTION_DAYS = 30
 DEFAULT_FLUSH_INTERVAL = 300  # 5分
+DEFAULT_IDLE_THRESHOLD_SECONDS = 600  # 10分
 MIN_INTERVAL = 10  # 最小間隔（秒）
 MIN_RETENTION_DAYS = 1
+MIN_IDLE_THRESHOLD_SECONDS = 10  # 最小アイドル判定閾値（秒）
 
 CONFIG_DIR = Path.home() / "Library" / "Application Support" / "ScreenLog"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -25,6 +27,7 @@ def get_config() -> dict:
         "interval": DEFAULT_INTERVAL,
         "retention_days": DEFAULT_RETENTION_DAYS,
         "flush_interval": DEFAULT_FLUSH_INTERVAL,
+        "idle_threshold_seconds": DEFAULT_IDLE_THRESHOLD_SECONDS,
     }
 
     if CONFIG_FILE.exists():
@@ -89,3 +92,24 @@ def validate_retention_days(days: int) -> int:
             f"ログ保持日数は{MIN_RETENTION_DAYS}日以上を指定してください（指定値: {days}日）"
         )
     return days
+
+
+def validate_idle_threshold_seconds(seconds: int) -> int:
+    """
+    アイドル（無操作）判定の閾値秒数をバリデーションする。
+
+    Args:
+        seconds: 無操作と判定する秒数
+
+    Returns:
+        int: バリデーション済みの閾値秒数
+
+    Raises:
+        ValueError: 閾値が不正な場合
+    """
+    if seconds < MIN_IDLE_THRESHOLD_SECONDS:
+        raise ValueError(
+            f"アイドル判定の閾値は{MIN_IDLE_THRESHOLD_SECONDS}秒以上を指定してください"
+            f"（指定値: {seconds}秒）"
+        )
+    return seconds

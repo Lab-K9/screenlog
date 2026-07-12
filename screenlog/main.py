@@ -22,6 +22,7 @@ from .logger import (
 from .config import (
     save_config,
     MIN_INTERVAL,
+    validate_idle_threshold_seconds,
     validate_interval,
     validate_retention_days,
 )
@@ -45,12 +46,15 @@ def process_single_capture(
     previous_entry: LogEntry | None = None,
     *,
     flush_interval_seconds: int = 300,
+    idle_threshold_seconds: int = 600,
 ) -> tuple[LogEntry | None, LogEntry | None]:
     """
     1回のキャプチャ処理を実行
 
     Args:
         previous_entry: 前回のログエントリ（まだファイルに書き込んでいないもの）
+        flush_interval_seconds: 同一画面継続時にログを分割保存する間隔（秒）
+        idle_threshold_seconds: 無操作と判定する秒数。以上の無操作でスクリーンショット・OCRをスキップする
 
     Returns:
         tuple[LogEntry | None, LogEntry | None]: (書き込むべきエントリ, 現在のエントリ)
@@ -60,6 +64,7 @@ def process_single_capture(
     result = process_capture(
         previous_entry=previous_entry,
         flush_interval_seconds=flush_interval_seconds,
+        idle_threshold_seconds=idle_threshold_seconds,
     )
     _print_capture_result(result)
     return (result.to_write, result.current_entry)
@@ -83,19 +88,27 @@ def _print_capture_result(result: CaptureCycleResult) -> None:
     )
 
 
-def run_loop(interval: int, retention_days: int, flush_interval_seconds: int):
+def run_loop(
+    interval: int,
+    retention_days: int,
+    flush_interval_seconds: int,
+    idle_threshold_seconds: int = 600,
+):
     """
     メインループを実行
 
     Args:
         interval: キャプチャ間隔（秒）
         retention_days: ログ保持日数
+        flush_interval_seconds: 同一画面継続時にログを分割保存する間隔（秒）
+        idle_threshold_seconds: 無操作と判定する秒数
     """
     global running
 
     print(f"ScreenLog started. Capturing every {interval} seconds.")
     print(f"Log retention: {retention_days} days")
     print(f"Flush interval: {flush_interval_seconds} seconds")
+    print(f"Idle threshold: {idle_threshold_seconds} seconds")
     print(f"Logs will be saved to: {Path.home() / 'Library' / 'Application Support' / 'ScreenLog' / 'logs'}")
     print("-" * 60)
 
@@ -136,6 +149,7 @@ def run_loop(interval: int, retention_days: int, flush_interval_seconds: int):
             to_write, new_entry = process_single_capture(
                 current_entry,
                 flush_interval_seconds=flush_interval_seconds,
+                idle_threshold_seconds=idle_threshold_seconds,
             )
 
             # OCRテキストが変わった場合は前回のエントリを書き込む
@@ -216,6 +230,12 @@ def main():
         help=f"同一画面継続時にログを分割保存する間隔（秒）。最小: {MIN_INTERVAL}秒。デフォルト: %(default)s"
     )
     parser.add_argument(
+        "--idle-threshold",
+        type=int,
+        default=settings.idle_threshold_seconds,
+        help="無操作と判定する秒数。以上無操作が続くとスクリーンショット・OCRをスキップする。デフォルト: %(default)s"
+    )
+    parser.add_argument(
         "--save-config",
         action="store_true",
         help="現在のオプションを設定ファイルに保存して終了"
@@ -228,6 +248,7 @@ def main():
         validate_interval(args.interval)
         validate_interval(args.flush_interval)
         validate_retention_days(args.retention)
+        validate_idle_threshold_seconds(args.idle_threshold)
     except ValueError as e:
         parser.error(str(e))
 
@@ -237,6 +258,7 @@ def main():
             "interval": args.interval,
             "retention_days": args.retention,
             "flush_interval": args.flush_interval,
+            "idle_threshold_seconds": args.idle_threshold,
         }
         if save_config(new_config):
             print(f"設定を保存しました: {new_config}")
@@ -253,6 +275,7 @@ def main():
         # 1回だけ実行
         to_write, current_entry = process_single_capture(
             flush_interval_seconds=args.flush_interval,
+            idle_threshold_seconds=args.idle_threshold,
         )
         # 即座にエントリを書き込む
         if current_entry is not None:
@@ -266,6 +289,7 @@ def main():
             interval=args.interval,
             retention_days=args.retention,
             flush_interval_seconds=args.flush_interval,
+            idle_threshold_seconds=args.idle_threshold,
         )
 
 

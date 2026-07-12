@@ -32,6 +32,7 @@ class ScreenLogApp(rumps.App):
         self.interval = settings.interval
         self.retention_days = settings.retention_days
         self.flush_interval = settings.flush_interval
+        self.idle_threshold_seconds = settings.idle_threshold_seconds
         self.enabled = True
         self.running = True
 
@@ -241,6 +242,7 @@ class ScreenLogApp(rumps.App):
                     result = process_capture(
                         previous_entry=self.current_entry,
                         flush_interval_seconds=self.flush_interval,
+                        idle_threshold_seconds=self.idle_threshold_seconds,
                     )
 
                     if result.to_write is not None:

@@ -11,6 +11,7 @@ from screenlog.summarize import (
     extract_topic_hints,
     generate_daily_review_from_entries,
     infer_project_hints,
+    split_idle_entries,
 )
 
 
@@ -187,6 +188,161 @@ class SummarizeTests(unittest.TestCase):
         self.assertFalse(
             any("どのプロジェクトにも帰属しない作業" in flag for flag in below_flags)
         )
+
+    def test_idle_entries_excluded_from_usage(self):
+        entries = [
+            {
+                "schema_version": 2,
+                "start_time": "2026-05-12T09:00:00+09:00",
+                "working_app": "Cursor",
+                "duration_minutes": 20,
+                "ocr_text": "business-context の作業",
+            },
+            {
+                "schema_version": 2,
+                "start_time": "2026-05-12T09:20:00+09:00",
+                "working_app": "Cursor",
+                "duration_minutes": 15,
+                "ocr_text": "",
+                "idle": True,
+            },
+        ]
+
+        active_entries, idle_minutes = split_idle_entries(entries)
+
+        self.assertEqual(len(active_entries), 1)
+        self.assertEqual(idle_minutes, 15)
+
+        usage = calculate_app_usage(active_entries)
+        self.assertEqual(usage["Cursor"], 20)
+
+        review = generate_daily_review_from_entries(
+            entries,
+            datetime(2026, 5, 12),
+        )
+        self.assertIn("- 放置: 15分", review)
+        self.assertIn("- 推定記録分数: 20分", review)
+
+    def test_idle_fallback_detects_static_block(self):
+        # 同じOCR先頭60字がidleフラグ無しで10件以上・30分以上続く場合、
+        # fallback heuristicで放置と推定する。
+        entries = [
+            {
+                "schema_version": 2,
+                "start_time": f"2026-05-12T09:{i * 3:02d}:00+09:00",
+                "working_app": "Slack",
+                "duration_minutes": 3,
+                "ocr_text": "Slack\nファイル\n編集\n表示\n開始\n履歴\nウィンドウ\nヘルプ",
+            }
+            for i in range(12)
+        ]
+
+        active_entries, idle_minutes = split_idle_entries(entries)
+
+        self.assertEqual(active_entries, [])
+        self.assertEqual(idle_minutes, 36)
+
+        review = generate_daily_review_from_entries(entries, datetime(2026, 5, 12))
+        self.assertIn("- 放置: 36分", review)
+        self.assertIn("放置推定 36分（旧ログheuristic）", review)
+
+    def test_idle_fallback_ignores_active_block(self):
+        # OCR内容が毎回変わっている（3種類以上の先頭60字が出現する）場合は、
+        # 10件以上続いても放置と推定しない。
+        entries = [
+            {
+                "schema_version": 2,
+                "start_time": f"2026-05-12T09:{i * 3:02d}:00+09:00",
+                "working_app": "Cursor",
+                "duration_minutes": 3,
+                "ocr_text": f"business-context タスク{i}の作業メモ",
+            }
+            for i in range(12)
+        ]
+
+        active_entries, idle_minutes = split_idle_entries(entries)
+
+        self.assertEqual(len(active_entries), 12)
+        self.assertEqual(idle_minutes, 0)
+
+    def test_idle_fallback_excludes_adjacent_singleton_active_entries(self):
+        # 静的idleブロックに隣接する単発のアクティブエントリ（prefixが1回しか
+        # 出現しない）が、ブロックに吸収されて放置扱いされないことを確認する。
+        # active→idle / idle→active の両方向を検証する。
+        def active_entry(index: int, minute: int) -> dict:
+            return {
+                "schema_version": 2,
+                "start_time": f"2026-05-12T09:{minute:02d}:00+09:00",
+                "working_app": "Cursor",
+                "duration_minutes": 3,
+                "ocr_text": f"business-context タスク{index}の作業メモ",
+            }
+
+        def static_entry(minute: int) -> dict:
+            return {
+                "schema_version": 2,
+                "start_time": f"2026-05-12T10:{minute:02d}:00+09:00",
+                "working_app": "Slack",
+                "duration_minutes": 3,
+                "ocr_text": "Slack\nファイル\n編集\n表示\n開始\n履歴\nウィンドウ\nヘルプ",
+            }
+
+        active_block = [active_entry(i, i * 3) for i in range(5)]
+        static_block = [static_entry(i * 3) for i in range(10)]  # 30分
+
+        # active→idle
+        active_entries, idle_minutes = split_idle_entries(active_block + static_block)
+        self.assertEqual(idle_minutes, 30)
+        self.assertEqual(len(active_entries), 5)
+        self.assertTrue(
+            all(entry["working_app"] == "Cursor" for entry in active_entries)
+        )
+
+        # idle→active
+        active_entries, idle_minutes = split_idle_entries(static_block + active_block)
+        self.assertEqual(idle_minutes, 30)
+        self.assertEqual(len(active_entries), 5)
+        self.assertTrue(
+            all(entry["working_app"] == "Cursor" for entry in active_entries)
+        )
+
+    def test_idle_fallback_boundary_thresholds(self):
+        # 境界値: 静的10件・30分ちょうどは放置と推定し、
+        # 9件（27分）は件数・分数とも閾値未満なので推定しない。
+        def static_entries(count: int) -> list[dict]:
+            return [
+                {
+                    "schema_version": 2,
+                    "start_time": f"2026-05-12T09:{i * 3:02d}:00+09:00",
+                    "working_app": "Slack",
+                    "duration_minutes": 3,
+                    "ocr_text": "Slack\nファイル\n編集\n表示\n開始\n履歴\nウィンドウ\nヘルプ",
+                }
+                for i in range(count)
+            ]
+
+        _, idle_minutes = split_idle_entries(static_entries(10))
+        self.assertEqual(idle_minutes, 30)
+
+        active_entries, idle_minutes = split_idle_entries(static_entries(9))
+        self.assertEqual(idle_minutes, 0)
+        self.assertEqual(len(active_entries), 9)
+
+        # 10件以上でも合計29分なら推定しない。
+        short_entries = [
+            {
+                "schema_version": 2,
+                "start_time": f"2026-05-12T09:{i * 2:02d}:00+09:00",
+                "working_app": "Slack",
+                "duration_minutes": 2,
+                "ocr_text": "Slack\nファイル\n編集\n表示\n開始\n履歴\nウィンドウ\nヘルプ",
+            }
+            for i in range(10)
+        ]
+        # 2分×10件=20分 < 30分
+        active_entries, idle_minutes = split_idle_entries(short_entries)
+        self.assertEqual(idle_minutes, 0)
+        self.assertEqual(len(active_entries), 10)
 
     def test_default_daily_summary_path_uses_daily_notes(self):
         path = default_daily_summary_path(datetime(2026, 5, 12), home=Path("/Users/example"))
