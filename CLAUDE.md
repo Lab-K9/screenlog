@@ -74,6 +74,19 @@ open ~/Applications/ScreenLog.app
 ./scripts/uninstall-launch-agent.sh
 ```
 
+### 稼働監視（watchdog）
+
+launch agent は `RunAtLoad` のみで `KeepAlive` が無いため、アプリが落ちると次回ログインまで復帰しない（2026-06-30〜07-08 に7日間ログ欠損した実害、Issue #13）。watchdog（`com.labk9.screenlog-watchdog`）が30分おきに死活監視し、停止していれば自動再起動して macOS 通知する。ログ鮮度（本日分 jsonl が30分以上未更新）も検知する。
+
+```bash
+./scripts/install-watchdog.sh
+./scripts/uninstall-watchdog.sh
+```
+
+- watchdog 動作ログ: `~/Library/Logs/ScreenLog.watchdog.log`
+- 再起動失敗時は exit 1 で終了し、`corporateos-doctor.sh` チェック1（com.labk9.* 非ゼロ終了）が検知する
+- `corporateos-doctor.sh` チェック13はプロセス死活・ログ鮮度・watchdog ロード状態まで確認する
+
 ### 既知の注意点
 
 - **setup.py の `packages` リストに PyObjC 関連パッケージを含めること。** py2app の `includes` だけでは `.so` ファイルしかコピーされず、Python ファイル（`__init__.py` 等）が欠落して `import objc` が失敗する。
