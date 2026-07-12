@@ -98,6 +98,6 @@ launch agent は `RunAtLoad` のみで `KeepAlive` が無いため、アプリ�
 - ログ保存先: `~/Library/Application Support/ScreenLog/logs/YYYY-MM-DD.jsonl`
 - 一時スクリーンショット: `~/Library/Application Support/ScreenLog/tmp/`（処理後に自動削除）
 - ログ保持期間: 30日（起動時に古いログを自動削除）
-- 推定ルール: `~/Library/Application Support/ScreenLog/summary-rules.json`
+- 推定ルール: `~/Library/Application Support/ScreenLog/summary-rules.json`（プロジェクト推定のキーワード辞書。案件の開始・終了時に更新する。日次レビューは evening-routine ステップ6で毎日実施）
 - 診断: `venv/bin/python -m screenlog.doctor`
 - v2ログでは `focused_app`（OS上の前面）と `working_app`（ScreenLogが作業実体と判断）を分離する。サマリーや分析では `working_app` を優先する。
