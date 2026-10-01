@@ -129,6 +129,18 @@ cat ~/Library/Application\ Support/ScreenLog/logs/$(date +%Y-%m-%d).jsonl | jq .
 
 `active_app` / `window_title` は後方互換のため残しているが、v2では実作業の判定には `working_app` / `working_title` を使う。`focused_app` はmacOSが前面とみなしたアプリで、tldvなどの補助アプリが入る場合がある。
 
+`image_path` は、そのエントリの画面を保存した縮小JPEGの絶対パス（画像保存が有効なサイクルで記録される。直前の保存画像とほぼ同じ画面なら、その画像のパス。保存に失敗した場合は `null`。idle エントリと画像保存導入前のログには無い）。
+
+## 作業画面の画像保存
+
+OCR（原寸の画像で実行）のあと、画像を消さずに横幅を半分（例: 内蔵Retina 3024px → 1512px。原寸幅が1600px以下なら縮小しない）・JPEG品質70で `images/YYYY-MM-DD/HHMMSS.jpg` に保存する。
+
+- 直前に保存した画像と画面がほぼ同じ（32x32グレースケールの平均絶対差が2.0未満）なら保存しない。
+- idle（無操作）中は撮影しないので画像も保存しない。
+- 保持期間は `config.json` の `image_retention_days`（既定30日、`--image-retention-days` で指定）。文字ログの `retention_days` とは独立で、期限切れの日付フォルダだけを起動時と日付変更時に削除する。
+- 保存に失敗しても撮影・OCR・ログ記録は続く（失敗はログ出力）。
+- `python -m screenlog.doctor`（`--json` も）で画像フォルダの合計容量・ファイル数・最古の日付を確認できる。
+
 `capture_status` は `ok` / `empty_ocr` / `suspicious_menu_only` / `screen_permission_denied` / `capture_failed` のいずれか。空OCRも診断目的で保存する。
 
 ## AIによる作業まとめ
@@ -225,8 +237,11 @@ Macアプリを再ビルドして置き換える場合は、同じBundle IDと�
 │   ├── 2024-12-21.jsonl
 │   ├── 2024-12-22.jsonl
 │   └── 2024-12-23.jsonl
+├── images/                   # 作業画面の縮小JPEG（image_retention_days 日で日付フォルダごと自動削除）
+│   └── 2024-12-23/
+│       └── 101530.jpg        # HHMMSS.jpg
 ├── tmp/                      # 一時ファイル（自動削除）
-├── config.json               # interval / retention_days / flush_interval
+├── config.json               # interval / retention_days / image_retention_days / flush_interval
 └── summary-rules.json        # 推定プロジェクト・トピック辞書
 ```
 

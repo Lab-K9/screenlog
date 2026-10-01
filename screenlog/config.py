@@ -6,10 +6,12 @@ from pathlib import Path
 # デフォルト設定
 DEFAULT_INTERVAL = 60  # 1分
 DEFAULT_RETENTION_DAYS = 30
+DEFAULT_IMAGE_RETENTION_DAYS = 30  # 作業画面の画像の保持日数（文字ログとは独立）
 DEFAULT_FLUSH_INTERVAL = 300  # 5分
 DEFAULT_IDLE_THRESHOLD_SECONDS = 600  # 10分
 MIN_INTERVAL = 10  # 最小間隔（秒）
 MIN_RETENTION_DAYS = 1
+MIN_IMAGE_RETENTION_DAYS = 1
 MIN_IDLE_THRESHOLD_SECONDS = 10  # 最小アイドル判定閾値（秒）
 
 CONFIG_DIR = Path.home() / "Library" / "Application Support" / "ScreenLog"
@@ -26,6 +28,7 @@ def get_config() -> dict:
     defaults = {
         "interval": DEFAULT_INTERVAL,
         "retention_days": DEFAULT_RETENTION_DAYS,
+        "image_retention_days": DEFAULT_IMAGE_RETENTION_DAYS,
         "flush_interval": DEFAULT_FLUSH_INTERVAL,
         "idle_threshold_seconds": DEFAULT_IDLE_THRESHOLD_SECONDS,
     }
@@ -90,6 +93,15 @@ def validate_retention_days(days: int) -> int:
     if days < MIN_RETENTION_DAYS:
         raise ValueError(
             f"ログ保持日数は{MIN_RETENTION_DAYS}日以上を指定してください（指定値: {days}日）"
+        )
+    return days
+
+
+def validate_image_retention_days(days: int) -> int:
+    """画像保持日数をバリデーションする（当日分の削除を防ぐため1日以上）。"""
+    if days < MIN_IMAGE_RETENTION_DAYS:
+        raise ValueError(
+            f"画像保持日数は{MIN_IMAGE_RETENTION_DAYS}日以上を指定してください（指定値: {days}日）"
         )
     return days
 

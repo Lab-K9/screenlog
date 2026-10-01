@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable
+from typing import Callable, Protocol
 
 from .idle import get_idle_seconds
 from .logger import LogEntry, create_log_entry, update_log_entry
@@ -18,6 +18,10 @@ TextExtractor = Callable[[str], OCRResult]
 ScreenshotDeleter = Callable[[str], bool]
 ScreenPermissionChecker = Callable[[], bool | None]
 IdleSecondsProvider = Callable[[], float | None]
+
+
+class ImageSaver(Protocol):
+    def save(self, src_path: str, timestamp: datetime) -> str | None: ...
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,25 @@ def _create_entry(
         window_context=enriched_context,
         idle=idle,
     )
+
+
+def _save_image(
+    image_store: ImageSaver | None, screenshot_path: str, timestamp: datetime
+) -> str | None:
+    """画像保存。失敗しても撮影・OCR・ログ記録を止めない。"""
+    if image_store is None:
+        return None
+    try:
+        return image_store.save(screenshot_path, timestamp)
+    except Exception as e:
+        print(f"Image save error: {e}")
+        return None
+
+
+def _attach_image_path(entry: LogEntry, image_path: str | None, *, enabled: bool) -> None:
+    """画像保存が有効なら image_path を記録する（未保存・失敗時は null）。"""
+    if enabled:
+        entry["image_path"] = image_path
 
 
 def _process_idle_cycle(
@@ -177,6 +200,7 @@ def process_capture(
     screen_permission_checker: ScreenPermissionChecker = screen_recording_preflight,
     idle_seconds_provider: IdleSecondsProvider = get_idle_seconds,
     idle_threshold_seconds: int = 600,
+    image_store: ImageSaver | None = None,
 ) -> CaptureCycleResult:
     """Run one capture cycle and return the entry state transition."""
     if timestamp is None:
@@ -246,6 +270,8 @@ def process_capture(
 
     try:
         ocr_result = text_extractor(screenshot_path)
+        # OCRは原寸のまま済ませた後で、人が見返す用の縮小画像を保存する
+        image_path = _save_image(image_store, screenshot_path, timestamp)
         same_entry = _entry_matches_current(
             previous_entry,
             active_app=active_app,
@@ -267,6 +293,7 @@ def process_capture(
                     window_context=window_context,
                     screen_recording_allowed=screen_recording_allowed,
                 )
+                _attach_image_path(current_entry, image_path, enabled=image_store is not None)
                 return CaptureCycleResult(
                     to_write=previous_entry,
                     current_entry=current_entry,
@@ -279,6 +306,8 @@ def process_capture(
                 new_timestamp=timestamp,
                 new_confidence=ocr_result.confidence,
             )
+            if image_path is not None and not current_entry.get("image_path"):
+                current_entry["image_path"] = image_path
             return CaptureCycleResult(
                 to_write=None,
                 current_entry=current_entry,
@@ -294,6 +323,7 @@ def process_capture(
             window_context=window_context,
             screen_recording_allowed=screen_recording_allowed,
         )
+        _attach_image_path(current_entry, image_path, enabled=image_store is not None)
         reason = "new" if previous_entry is None else "changed"
         return CaptureCycleResult(
             to_write=previous_entry,

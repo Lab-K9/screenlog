@@ -36,6 +36,7 @@ class LogEntry(TypedDict):
     screen_recording_allowed: NotRequired[bool | None]
     top_windows: NotRequired[list[dict[str, Any]]]
     idle: NotRequired[bool]
+    image_path: NotRequired[str | None]
 
 
 def get_log_dir() -> Path:

@@ -13,6 +13,7 @@ from .logger import (
     LogEntry
 )
 from .permissions import ensure_screen_recording_access
+from .images import ImageStore, cleanup_old_images
 from .recorder import process_capture
 from .runtime import load_runtime_settings
 from .capture import cleanup_tmp_screenshots
@@ -33,6 +34,8 @@ class ScreenLogApp(rumps.App):
         self.retention_days = settings.retention_days
         self.flush_interval = settings.flush_interval
         self.idle_threshold_seconds = settings.idle_threshold_seconds
+        self.image_retention_days = settings.image_retention_days
+        self.image_store = ImageStore()
         self.enabled = True
         self.running = True
 
@@ -54,6 +57,9 @@ class ScreenLogApp(rumps.App):
         deleted = cleanup_old_logs(days=self.retention_days)
         if deleted > 0:
             print(f"Cleaned up {deleted} old log file(s)")
+        deleted_images = cleanup_old_images(self.image_retention_days)
+        if deleted_images > 0:
+            print(f"Cleaned up {deleted_images} old image folder(s)")
         deleted_tmp = cleanup_tmp_screenshots()
         if deleted_tmp > 0:
             print(f"Cleaned up {deleted_tmp} old temporary screenshot(s)")
@@ -237,12 +243,14 @@ class ScreenLogApp(rumps.App):
                         self.current_date = now.date()
                         self.today_capture_count = 0
                         self.flush_pending_entries()
+                        cleanup_old_images(self.image_retention_days)
 
                     # キャプチャ処理
                     result = process_capture(
                         previous_entry=self.current_entry,
                         flush_interval_seconds=self.flush_interval,
                         idle_threshold_seconds=self.idle_threshold_seconds,
+                        image_store=self.image_store,
                     )
 
                     if result.to_write is not None:

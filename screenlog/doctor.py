@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import DEFAULT_FLUSH_INTERVAL, DEFAULT_INTERVAL, get_config
+from .images import get_images_dir, image_usage
 from .logger import get_log_dir
 from .permissions import screen_recording_preflight
 from .window import get_window_context
@@ -80,6 +81,7 @@ def build_doctor_report(
     latest_log_modified_at: datetime | None = None,
     screen_permission_checker=screen_recording_preflight,
     config: dict[str, Any] | None = None,
+    images_dir: Path | None = None,
 ) -> dict[str, Any]:
     """現在のScreenLog診断レポートを作る。"""
     checked_at = (now or datetime.now().astimezone()).astimezone()
@@ -159,6 +161,7 @@ def build_doctor_report(
         "capture_mode": context.get("capture_mode"),
         "selection_reason": context.get("selection_reason"),
         "latest_log": latest_log_info,
+        "images": image_usage(images_dir if images_dir is not None else get_images_dir()),
         "top_windows": context.get("top_windows", []),
     }
 
@@ -186,6 +189,12 @@ def _print_human(report: dict[str, Any]) -> None:
         print(f"latest_log_size: {latest_log['size_bytes']} bytes")
     else:
         print("latest_log: none")
+
+    images = report.get("images")
+    if images:
+        print(f"images: {images['path']}")
+        print(f"images_total: {images['total_bytes']} bytes ({images['file_count']} files)")
+        print(f"images_oldest_date: {images['oldest_date'] or '-'}")
 
     print("")
     print("Top windows")

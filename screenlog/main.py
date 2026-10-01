@@ -23,10 +23,12 @@ from .config import (
     save_config,
     MIN_INTERVAL,
     validate_idle_threshold_seconds,
+    validate_image_retention_days,
     validate_interval,
     validate_retention_days,
 )
 from .recorder import CaptureCycleResult, process_capture
+from .images import ImageStore, cleanup_old_images
 from .runtime import load_runtime_settings
 from .capture import cleanup_tmp_screenshots
 
@@ -47,6 +49,7 @@ def process_single_capture(
     *,
     flush_interval_seconds: int = 300,
     idle_threshold_seconds: int = 600,
+    image_store: ImageStore | None = None,
 ) -> tuple[LogEntry | None, LogEntry | None]:
     """
     1回のキャプチャ処理を実行
@@ -65,6 +68,7 @@ def process_single_capture(
         previous_entry=previous_entry,
         flush_interval_seconds=flush_interval_seconds,
         idle_threshold_seconds=idle_threshold_seconds,
+        image_store=image_store,
     )
     _print_capture_result(result)
     return (result.to_write, result.current_entry)
@@ -93,6 +97,7 @@ def run_loop(
     retention_days: int,
     flush_interval_seconds: int,
     idle_threshold_seconds: int = 600,
+    image_retention_days: int = 30,
 ):
     """
     メインループを実行
@@ -102,11 +107,13 @@ def run_loop(
         retention_days: ログ保持日数
         flush_interval_seconds: 同一画面継続時にログを分割保存する間隔（秒）
         idle_threshold_seconds: 無操作と判定する秒数
+        image_retention_days: 作業画面の画像の保持日数（文字ログとは独立）
     """
     global running
 
     print(f"ScreenLog started. Capturing every {interval} seconds.")
     print(f"Log retention: {retention_days} days")
+    print(f"Image retention: {image_retention_days} days")
     print(f"Flush interval: {flush_interval_seconds} seconds")
     print(f"Idle threshold: {idle_threshold_seconds} seconds")
     print(f"Logs will be saved to: {Path.home() / 'Library' / 'Application Support' / 'ScreenLog' / 'logs'}")
@@ -116,6 +123,10 @@ def run_loop(
     deleted = cleanup_old_logs(days=retention_days)
     if deleted > 0:
         print(f"Cleaned up {deleted} old log file(s)")
+    deleted_images = cleanup_old_images(image_retention_days)
+    if deleted_images > 0:
+        print(f"Cleaned up {deleted_images} old image folder(s)")
+    image_store = ImageStore()
     deleted_tmp = cleanup_tmp_screenshots()
     if deleted_tmp > 0:
         print(f"Cleaned up {deleted_tmp} old temporary screenshot(s)")
@@ -144,12 +155,14 @@ def run_loop(
                         print(f"[{now.strftime('%H:%M:%S')}] Date changed - wrote final entry to previous day's log")
                 current_entry = None
                 current_date = now.date()
+                cleanup_old_images(image_retention_days)
 
             # キャプチャ処理
             to_write, new_entry = process_single_capture(
                 current_entry,
                 flush_interval_seconds=flush_interval_seconds,
                 idle_threshold_seconds=idle_threshold_seconds,
+                image_store=image_store,
             )
 
             # OCRテキストが変わった場合は前回のエントリを書き込む
@@ -236,6 +249,12 @@ def main():
         help="無操作と判定する秒数。以上無操作が続くとスクリーンショット・OCRをスキップする。デフォルト: %(default)s"
     )
     parser.add_argument(
+        "--image-retention-days",
+        type=int,
+        default=settings.image_retention_days,
+        help="作業画面の画像の保持日数（文字ログの保持期間とは独立）。デフォルト: %(default)s"
+    )
+    parser.add_argument(
         "--save-config",
         action="store_true",
         help="現在のオプションを設定ファイルに保存して終了"
@@ -248,6 +267,7 @@ def main():
         validate_interval(args.interval)
         validate_interval(args.flush_interval)
         validate_retention_days(args.retention)
+        validate_image_retention_days(args.image_retention_days)
         validate_idle_threshold_seconds(args.idle_threshold)
     except ValueError as e:
         parser.error(str(e))
@@ -257,6 +277,7 @@ def main():
         new_config = {
             "interval": args.interval,
             "retention_days": args.retention,
+            "image_retention_days": args.image_retention_days,
             "flush_interval": args.flush_interval,
             "idle_threshold_seconds": args.idle_threshold,
         }
@@ -276,6 +297,7 @@ def main():
         to_write, current_entry = process_single_capture(
             flush_interval_seconds=args.flush_interval,
             idle_threshold_seconds=args.idle_threshold,
+            image_store=ImageStore(),
         )
         # 即座にエントリを書き込む
         if current_entry is not None:
@@ -290,6 +312,7 @@ def main():
             retention_days=args.retention,
             flush_interval_seconds=args.flush_interval,
             idle_threshold_seconds=args.idle_threshold,
+            image_retention_days=args.image_retention_days,
         )
 
 
